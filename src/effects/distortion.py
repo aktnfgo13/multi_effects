@@ -1,21 +1,28 @@
 import numpy as np
 
 
-def apply_distortion(audio_data, drive_db=12.0, threshold=0.7):
-    # 1. dB를 실제 배율로 변환
+def apply_hard_clipping(audio_data, drive_db=12.0, threshold=0.7):
     drive_linear = 10 ** (drive_db / 20)
 
-    # 2. 입력 신호 증폭
     driven_signal = audio_data * drive_linear
 
-    # 3. Hard Clipping
     output = np.clip(
         driven_signal,
         -threshold,
         threshold,
     )
 
-    # 4. 다시 -1 ~ 1 범위로 정규화
     output = output / threshold
+
+    return output
+
+
+def apply_soft_clipping(audio_data, drive_db=12.0):
+    drive_linear = 10 ** (drive_db / 20)
+
+    driven_signal = audio_data * drive_linear
+
+    # 부드러운 비선형 포화
+    output = np.tanh(driven_signal)
 
     return output
