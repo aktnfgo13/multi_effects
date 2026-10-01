@@ -1,7 +1,13 @@
 .DS_Store
+
 audio/input/*.wav
 audio/output/*.wav
+
+audio/ir/*.wav
+!audio/ir/.gitkeep
+
 __pycache__/
 *.pyc
-audio/ir/*.wav
-!audio/ir/.gitkeep*.egg-info/
+*.egg-info/
+.pytest_cache/
+.venv/
