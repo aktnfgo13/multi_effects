@@ -17,7 +17,7 @@ def db_to_linear(db):
 
 
 # =========================================================
-# Saturation
+# Preamp Saturation
 # =========================================================
 
 def _preamp_saturation(
@@ -26,10 +26,7 @@ def _preamp_saturation(
     bias,
 ):
     """
-    비대칭 Saturation
-
-    bias가 0이면 비교적 대칭적이고,
-    bias가 생기면 비대칭 왜곡 성분이 추가된다.
+    비대칭 Preamp Saturation
     """
 
     biased_signal = (
@@ -40,6 +37,7 @@ def _preamp_saturation(
         biased_signal * drive
     )
 
+    # Bias 때문에 생기는 DC Offset 보정
     dc_reference = np.tanh(
         bias * drive
     )
@@ -67,14 +65,14 @@ def _process_preamp_channel(
         signal * gain_linear
     )
 
-    # Preamp Stage 1
+    # Stage 1
     stage_1 = _preamp_saturation(
         stage_input,
         drive=drive,
         bias=bias,
     )
 
-    # Preamp Stage 2
+    # Stage 2
     stage_2 = _preamp_saturation(
         stage_1 * 1.3,
         drive=drive * 0.8,
@@ -97,7 +95,7 @@ def apply_amp_preamp(
     low_cut_hz=70.0,
 ):
     """
-    Amp Preamp Stage
+    Amp Preamp
     """
 
     filtered = high_pass_filter(
@@ -106,6 +104,7 @@ def apply_amp_preamp(
         cutoff=low_cut_hz,
     )
 
+    # Mono
     if filtered.ndim == 1:
 
         return _process_preamp_channel(
@@ -115,6 +114,7 @@ def apply_amp_preamp(
             bias,
         )
 
+    # Stereo
     processed = np.zeros_like(
         filtered,
         dtype=np.float64,
@@ -148,7 +148,7 @@ def apply_tone_stack(
     treble_db=0.0,
 ):
     """
-    Amp Tone Stack v0.1
+    Tone Stack v0.1
 
     Bass:
         Low Shelf
@@ -188,21 +188,143 @@ def apply_tone_stack(
 
 
 # =========================================================
-# Complete Amp Sim v0.1
+# Power Amp Saturation
+# =========================================================
+
+def _power_amp_saturation(
+    signal,
+    drive,
+):
+    """
+    단순 Power Amp Saturation
+
+    Preamp보다 완만한 Saturation을
+    의도한 기본 모델
+    """
+
+    return np.tanh(
+        signal * drive
+    )
+
+
+def apply_power_amp(
+    audio_data,
+    sample_rate,
+    master_db=-3.0,
+    power_drive=1.2,
+    presence_db=0.0,
+    output_db=-6.0,
+):
+    """
+    Power Amp v0.1
+
+    master_db:
+        Power Amp에 들어가는 레벨.
+        높일수록 Saturation도 증가.
+
+    power_drive:
+        Power Amp 비선형 강도.
+
+    presence_db:
+        출력단 고역 성향.
+
+    output_db:
+        최종 볼륨.
+        Power Amp 왜곡량과 독립적으로 사용.
+    """
+
+    # =========================
+    # Master
+    # =========================
+
+    master_gain = db_to_linear(
+        master_db
+    )
+
+    driven = (
+        audio_data * master_gain
+    )
+
+    # =========================
+    # Saturation
+    # =========================
+
+    if driven.ndim == 1:
+
+        processed = (
+            _power_amp_saturation(
+                driven,
+                power_drive,
+            )
+        )
+
+    else:
+
+        processed = np.zeros_like(
+            driven,
+            dtype=np.float64,
+        )
+
+        for channel in range(
+            driven.shape[1]
+        ):
+
+            processed[:, channel] = (
+                _power_amp_saturation(
+                    driven[:, channel],
+                    power_drive,
+                )
+            )
+
+    # =========================
+    # Presence
+    # =========================
+
+    processed = high_shelf_filter(
+        processed,
+        sample_rate,
+        frequency=4000.0,
+        gain_db=presence_db,
+        slope=1.0,
+    )
+
+    # =========================
+    # Output Level
+    # =========================
+
+    output_gain = db_to_linear(
+        output_db
+    )
+
+    processed *= output_gain
+
+    return processed
+
+
+# =========================================================
+# Complete Amp Sim
 # =========================================================
 
 def apply_amp_sim(
     audio_data,
     sample_rate,
+
     gain_db=12.0,
     drive=1.5,
     bias=0.05,
+
     bass_db=0.0,
     mid_db=0.0,
     treble_db=0.0,
+
+    master_db=-3.0,
+    power_drive=1.2,
+    presence_db=0.0,
+
     low_cut_hz=70.0,
     high_cut_hz=9000.0,
-    master_db=-6.0,
+
+    output_db=-6.0,
 ):
     """
     Amp Sim v0.1
@@ -211,15 +333,19 @@ def apply_amp_sim(
       ↓
     Low Cut
       ↓
-    Preamp Gain
+    Preamp
       ↓
-    Nonlinear Saturation
+    Tone Stack
       ↓
-    Bass / Mid / Treble
+    Master
+      ↓
+    Power Amp Saturation
+      ↓
+    Presence
       ↓
     High Cut
       ↓
-    Master
+    Output
     """
 
     # =========================
@@ -248,7 +374,20 @@ def apply_amp_sim(
     )
 
     # =========================
-    # High Cut
+    # Power Amp
+    # =========================
+
+    processed = apply_power_amp(
+        processed,
+        sample_rate,
+        master_db=master_db,
+        power_drive=power_drive,
+        presence_db=presence_db,
+        output_db=output_db,
+    )
+
+    # =========================
+    # Final High Cut
     # =========================
 
     processed = low_pass_filter(
@@ -256,15 +395,5 @@ def apply_amp_sim(
         sample_rate,
         cutoff=high_cut_hz,
     )
-
-    # =========================
-    # Master Level
-    # =========================
-
-    master_gain = db_to_linear(
-        master_db
-    )
-
-    processed *= master_gain
 
     return processed

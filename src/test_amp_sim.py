@@ -79,18 +79,27 @@ amp_output = apply_amp_sim(
     audio_data,
     sample_rate,
 
+    # Preamp
     gain_db=12.0,
     drive=1.5,
     bias=0.05,
 
+    # Tone Stack
     bass_db=2.0,
     mid_db=-1.0,
     treble_db=2.0,
 
+    # Power Amp
+    master_db=-3.0,
+    power_drive=1.2,
+    presence_db=1.5,
+
+    # Filtering
     low_cut_hz=70.0,
     high_cut_hz=9000.0,
 
-    master_db=-6.0,
+    # Final Level
+    output_db=-6.0,
 )
 
 print(
