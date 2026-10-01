@@ -11,7 +11,10 @@ from effects.amp_sim import (
 )
 
 
-def create_amp_sim_block():
+def create_amp_sim_block(
+    name="Amp Sim",
+    effect_id=None,
+):
     """
     Amp Sim EffectBlock 생성
 
@@ -20,7 +23,10 @@ def create_amp_sim_block():
     """
 
     return EffectBlock(
-        name="Amp Sim",
+        name=name,
+
+        effect_type="amp_sim",
+        effect_id=effect_id,
 
         processor=apply_amp_sim,
 

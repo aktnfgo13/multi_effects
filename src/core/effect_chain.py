@@ -8,19 +8,98 @@ class EffectChain:
         self,
         effects=None,
     ):
-        self.effects = (
-            list(effects)
-            if effects
-            else []
+        self.effects = []
+
+        # Effect Type별 ID 번호 관리
+        self._type_counters = {}
+
+        if effects:
+
+            for effect in effects:
+                self.add_effect(
+                    effect
+                )
+
+    def _generate_effect_id(
+        self,
+        effect_type,
+    ):
+        """
+        effect_type을 기준으로
+        고유 ID 생성
+
+        delay -> delay_1
+        delay -> delay_2
+        """
+
+        current = (
+            self._type_counters.get(
+                effect_type,
+                0,
+            )
         )
+
+        existing_ids = {
+            effect.effect_id
+            for effect in self.effects
+            if effect.effect_id
+        }
+
+        while True:
+
+            current += 1
+
+            candidate = (
+                f"{effect_type}_{current}"
+            )
+
+            if candidate not in existing_ids:
+                break
+
+        self._type_counters[
+            effect_type
+        ] = current
+
+        return candidate
+
+    def _prepare_effect(
+        self,
+        effect,
+    ):
+        """
+        Effect ID 생성 및 중복 검사
+        """
+
+        if effect.effect_id is None:
+
+            effect.effect_id = (
+                self._generate_effect_id(
+                    effect.effect_type
+                )
+            )
+
+        else:
+
+            for current in self.effects:
+
+                if (
+                    current.effect_id
+                    == effect.effect_id
+                ):
+                    raise ValueError(
+                        "Duplicate effect_id: "
+                        f"{effect.effect_id}"
+                    )
+
+        return effect
 
     def add_effect(
         self,
         effect,
     ):
-        """
-        Chain 마지막에 Effect 추가
-        """
+        effect = self._prepare_effect(
+            effect
+        )
 
         self.effects.append(
             effect
@@ -31,9 +110,9 @@ class EffectChain:
         index,
         effect,
     ):
-        """
-        원하는 위치에 Effect 삽입
-        """
+        effect = self._prepare_effect(
+            effect
+        )
 
         self.effects.insert(
             index,
@@ -44,20 +123,40 @@ class EffectChain:
         self,
         index,
     ):
-        """
-        Effect 삭제
-        """
-
         return self.effects.pop(
             index
         )
+
+    def get_effect_by_id(
+        self,
+        effect_id,
+    ):
+        """
+        고유 ID로 Effect 검색
+        """
+
+        for effect in self.effects:
+
+            if (
+                effect.effect_id
+                == effect_id
+            ):
+                return effect
+
+        return None
 
     def get_effect(
         self,
         name,
     ):
         """
-        이름으로 Effect 찾기
+        표시 이름으로 Effect 검색.
+
+        동일한 이름이 여러 개라면
+        첫 번째 Effect만 반환한다.
+
+        내부 로직에서는
+        get_effect_by_id() 사용 권장.
         """
 
         for effect in self.effects:
@@ -72,10 +171,6 @@ class EffectChain:
         old_index,
         new_index,
     ):
-        """
-        Effect 순서 변경
-        """
-
         effect = self.effects.pop(
             old_index
         )
@@ -90,17 +185,14 @@ class EffectChain:
         audio_data,
         sample_rate,
     ):
-        """
-        Chain 순서대로 모든 DSP 실행
-        """
-
         output = audio_data
 
         for effect in self.effects:
 
             print(
                 f"Processing: "
-                f"{effect.name}"
+                f"{effect.name} "
+                f"({effect.effect_id})"
                 f"{' [BYPASS]' if effect.bypass else ''}"
             )
 
@@ -114,10 +206,6 @@ class EffectChain:
     def print_chain(
         self,
     ):
-        """
-        현재 Chain 상태 출력
-        """
-
         print(
             "=== EFFECT CHAIN ==="
         )
@@ -135,5 +223,6 @@ class EffectChain:
             print(
                 f"{index + 1}. "
                 f"{effect.name} "
-                f"[{state}]"
+                f"[{state}] "
+                f"({effect.effect_id})"
             )

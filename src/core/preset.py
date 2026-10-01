@@ -4,19 +4,12 @@ from pathlib import Path
 import numpy as np
 
 
-def _make_json_safe(value):
-    """
-    JSON에 저장 가능한 값만 변환한다.
+PRESET_VERSION = 2
 
-    지원:
-    int / float / str / bool / None
-    list / tuple
-    dict
 
-    NumPy scalar는 Python scalar로 변환한다.
-    NumPy array는 현재 preset에서 제외한다.
-    """
-
+def _make_json_safe(
+    value,
+):
     if isinstance(
         value,
         (
@@ -54,8 +47,10 @@ def _make_json_safe(value):
 
         for key, item in value.items():
 
-            safe_value = _make_json_safe(
-                item
+            safe_value = (
+                _make_json_safe(
+                    item
+                )
             )
 
             if safe_value is not None:
@@ -70,11 +65,6 @@ def _make_json_safe(value):
 def _serialize_parameters(
     parameters,
 ):
-    """
-    Effect parameter 중
-    JSON 저장 가능한 값만 추출한다.
-    """
-
     serialized = {}
 
     for name, value in parameters.items():
@@ -84,7 +74,9 @@ def _serialize_parameters(
         )
 
         if safe_value is not None:
-            serialized[name] = safe_value
+            serialized[
+                name
+            ] = safe_value
 
     return serialized
 
@@ -94,7 +86,10 @@ def save_preset(
     preset_path,
 ):
     """
-    현재 Effect Chain을 JSON Preset으로 저장한다.
+    Preset Version 2
+
+    Effect를 name이 아닌
+    effect_id 기준으로 저장한다.
     """
 
     preset_path = Path(
@@ -107,13 +102,33 @@ def save_preset(
     )
 
     preset_data = {
-        "version": 1,
+        "version": PRESET_VERSION,
         "effects": [],
     }
 
+    used_ids = set()
+
     for effect in chain.effects:
 
+        if effect.effect_id is None:
+            raise ValueError(
+                f"Effect '{effect.name}' "
+                "has no effect_id."
+            )
+
+        if effect.effect_id in used_ids:
+            raise ValueError(
+                "Duplicate effect_id: "
+                f"{effect.effect_id}"
+            )
+
+        used_ids.add(
+            effect.effect_id
+        )
+
         effect_data = {
+            "id": effect.effect_id,
+            "type": effect.effect_type,
             "name": effect.name,
             "bypass": effect.bypass,
             "parameters": (
@@ -143,39 +158,128 @@ def save_preset(
         )
 
 
-def load_preset(
-    chain,
-    preset_path,
+def _apply_saved_effect(
+    effect,
+    saved_effect,
 ):
     """
-    JSON Preset을 읽어서
-    현재 Effect Chain에 적용한다.
-
-    - Effect 순서 복원
-    - Bypass 복원
-    - Parameter 복원
+    저장된 하나의 Effect 상태를
+    현재 EffectBlock에 적용
     """
 
-    preset_path = Path(
-        preset_path
+    saved_type = saved_effect.get(
+        "type"
     )
 
-    with open(
-        preset_path,
-        "r",
-        encoding="utf-8",
-    ) as file:
-
-        preset_data = json.load(
-            file
+    if (
+        saved_type is not None
+        and saved_type
+        != effect.effect_type
+    ):
+        raise ValueError(
+            "Effect type mismatch: "
+            f"{effect.effect_id} "
+            f"({effect.effect_type} != "
+            f"{saved_type})"
         )
 
-    saved_effects = preset_data.get(
-        "effects",
-        [],
+    # 사용자가 지정한 표시 이름도 복원
+    saved_name = saved_effect.get(
+        "name"
     )
 
-    # 현재 chain의 Effect를 이름으로 찾을 수 있게 만듦
+    if saved_name:
+        effect.name = saved_name
+
+    effect.set_bypass(
+        saved_effect.get(
+            "bypass",
+            False,
+        )
+    )
+
+    parameters = saved_effect.get(
+        "parameters",
+        {},
+    )
+
+    for parameter_name, value in (
+        parameters.items()
+    ):
+
+        effect.set_parameter(
+            parameter_name,
+            value,
+        )
+
+
+def _load_version_2(
+    chain,
+    saved_effects,
+):
+    """
+    Version 2:
+    effect_id 기준 복원
+    """
+
+    current_effects = {
+        effect.effect_id: effect
+        for effect in chain.effects
+    }
+
+    reordered_effects = []
+
+    for saved_effect in saved_effects:
+
+        effect_id = saved_effect.get(
+            "id"
+        )
+
+        if effect_id is None:
+            continue
+
+        effect = current_effects.get(
+            effect_id
+        )
+
+        # 현재 Chain에 없는 Effect
+        if effect is None:
+            continue
+
+        _apply_saved_effect(
+            effect,
+            saved_effect,
+        )
+
+        reordered_effects.append(
+            effect
+        )
+
+    # Preset에 없던 Effect는 뒤에 유지
+    for effect in chain.effects:
+
+        if (
+            effect
+            not in reordered_effects
+        ):
+            reordered_effects.append(
+                effect
+            )
+
+    chain.effects = reordered_effects
+
+
+def _load_version_1(
+    chain,
+    saved_effects,
+):
+    """
+    기존 Version 1 호환용.
+
+    Version 1은 name으로 식별했기 때문에
+    동일 이름 Effect 여러 개는 지원하지 않는다.
+    """
+
     current_effects = {
         effect.name: effect
         for effect in chain.effects
@@ -193,7 +297,6 @@ def load_preset(
             name
         )
 
-        # 현재 프로그램에 없는 Effect면 건너뜀
         if effect is None:
             continue
 
@@ -204,11 +307,9 @@ def load_preset(
             )
         )
 
-        parameters = (
-            saved_effect.get(
-                "parameters",
-                {},
-            )
+        parameters = saved_effect.get(
+            "parameters",
+            {},
         )
 
         for parameter_name, value in (
@@ -224,15 +325,59 @@ def load_preset(
             effect
         )
 
-    # Preset에 없던 Effect는 뒤에 유지
     for effect in chain.effects:
 
-        if effect not in reordered_effects:
-
+        if (
+            effect
+            not in reordered_effects
+        ):
             reordered_effects.append(
                 effect
             )
 
     chain.effects = reordered_effects
+
+
+def load_preset(
+    chain,
+    preset_path,
+):
+    preset_path = Path(
+        preset_path
+    )
+
+    with open(
+        preset_path,
+        "r",
+        encoding="utf-8",
+    ) as file:
+
+        preset_data = json.load(
+            file
+        )
+
+    version = preset_data.get(
+        "version",
+        1,
+    )
+
+    saved_effects = preset_data.get(
+        "effects",
+        [],
+    )
+
+    if version >= 2:
+
+        _load_version_2(
+            chain,
+            saved_effects,
+        )
+
+    else:
+
+        _load_version_1(
+            chain,
+            saved_effects,
+        )
 
     return preset_data
