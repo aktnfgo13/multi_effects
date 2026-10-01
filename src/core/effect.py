@@ -1,21 +1,6 @@
 class EffectBlock:
     """
     멀티이펙터의 공통 Effect Block
-
-    name:
-        이펙터 이름
-
-    processor:
-        실제 DSP 함수
-
-    parameters:
-        DSP 함수에 전달할 parameter
-
-    bypass:
-        True면 DSP를 통과하지 않음
-
-    use_sample_rate:
-        DSP 함수가 sample_rate를 사용하는지 여부
     """
 
     def __init__(
@@ -23,6 +8,7 @@ class EffectBlock:
         name,
         processor,
         parameters=None,
+        parameter_specs=None,
         bypass=False,
         use_sample_rate=True,
     ):
@@ -35,10 +21,50 @@ class EffectBlock:
             else {}
         )
 
+        self.parameter_specs = (
+            parameter_specs.copy()
+            if parameter_specs
+            else {}
+        )
+
         self.bypass = bypass
 
         self.use_sample_rate = (
             use_sample_rate
+        )
+
+        # 초기값도 범위 안으로 제한
+        for parameter_name in (
+            self.parameters
+        ):
+            self.parameters[
+                parameter_name
+            ] = self._validate_parameter(
+                parameter_name,
+                self.parameters[
+                    parameter_name
+                ],
+            )
+
+    def _validate_parameter(
+        self,
+        name,
+        value,
+    ):
+        """
+        ParameterSpec이 있으면
+        min/max 범위를 적용
+        """
+
+        spec = self.parameter_specs.get(
+            name
+        )
+
+        if spec is None:
+            return value
+
+        return spec.clamp(
+            value
         )
 
     def process(
@@ -46,10 +72,6 @@ class EffectBlock:
         audio_data,
         sample_rate,
     ):
-        """
-        Effect DSP 실행
-        """
-
         if self.bypass:
             return audio_data
 
@@ -72,31 +94,79 @@ class EffectBlock:
         value,
     ):
         """
-        Effect parameter 변경
+        Parameter 값을 변경한다.
+
+        ParameterSpec이 존재하면
+        min/max 범위를 자동 적용한다.
         """
 
-        self.parameters[name] = value
+        value = self._validate_parameter(
+            name,
+            value,
+        )
+
+        self.parameters[
+            name
+        ] = value
 
     def get_parameter(
         self,
         name,
     ):
-        """
-        Effect parameter 확인
-        """
-
         return self.parameters.get(
             name
         )
+
+    def get_parameter_spec(
+        self,
+        name,
+    ):
+        """
+        Parameter의 범위/단위 정보 반환
+        """
+
+        return self.parameter_specs.get(
+            name
+        )
+
+    def reset_parameter(
+        self,
+        name,
+    ):
+        """
+        Parameter를 기본값으로 복원
+        """
+
+        spec = self.parameter_specs.get(
+            name
+        )
+
+        if spec is None:
+            return
+
+        self.parameters[
+            name
+        ] = spec.default
+
+    def reset_all_parameters(
+        self,
+    ):
+        """
+        정의된 Parameter들을
+        모두 기본값으로 복원
+        """
+
+        for name, spec in (
+            self.parameter_specs.items()
+        ):
+            self.parameters[
+                name
+            ] = spec.default
 
     def set_bypass(
         self,
         bypass,
     ):
-        """
-        Bypass 설정
-        """
-
         self.bypass = bool(
             bypass
         )
@@ -104,16 +174,13 @@ class EffectBlock:
     def toggle_bypass(
         self,
     ):
-        """
-        Bypass ON/OFF 전환
-        """
-
         self.bypass = (
             not self.bypass
         )
 
-    def __repr__(self):
-
+    def __repr__(
+        self,
+    ):
         state = (
             "BYPASS"
             if self.bypass
