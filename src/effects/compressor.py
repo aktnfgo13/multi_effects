@@ -6,7 +6,9 @@ def db_to_linear(db):
 
 
 def linear_to_db(value):
-    return 20 * np.log10(np.maximum(value, 1e-12))
+    return 20 * np.log10(
+        np.maximum(value, 1e-12)
+    )
 
 
 def apply_compressor(
@@ -17,6 +19,7 @@ def apply_compressor(
     attack_ms=10.0,
     release_ms=100.0,
     makeup_gain_db=0.0,
+    return_gain_reduction=False,
 ):
     if audio_data.ndim > 1:
         detector_signal = np.mean(
@@ -26,13 +29,21 @@ def apply_compressor(
     else:
         detector_signal = np.abs(audio_data)
 
-    level_db = linear_to_db(detector_signal)
+    level_db = linear_to_db(
+        detector_signal
+    )
 
-    gain_reduction_db = np.zeros_like(level_db)
+    target_gain_db = np.zeros_like(
+        level_db
+    )
 
-    above_threshold = level_db > threshold_db
+    above_threshold = (
+        level_db > threshold_db
+    )
 
-    gain_reduction_db[above_threshold] = (
+    target_gain_db[
+        above_threshold
+    ] = (
         threshold_db
         + (
             level_db[above_threshold]
@@ -60,25 +71,27 @@ def apply_compressor(
     )
 
     smoothed_gain_db = np.zeros_like(
-        gain_reduction_db
+        target_gain_db
     )
 
-    current_gain = 0.0
+    current_gain_db = 0.0
 
-    for i, target_gain in enumerate(
-        gain_reduction_db
+    for i, target in enumerate(
+        target_gain_db
     ):
-        if target_gain < current_gain:
+        if target < current_gain_db:
             coeff = attack_coeff
         else:
             coeff = release_coeff
 
-        current_gain = (
-            coeff * current_gain
-            + (1 - coeff) * target_gain
+        current_gain_db = (
+            coeff * current_gain_db
+            + (1 - coeff) * target
         )
 
-        smoothed_gain_db[i] = current_gain
+        smoothed_gain_db[i] = (
+            current_gain_db
+        )
 
     total_gain_db = (
         smoothed_gain_db
@@ -92,6 +105,15 @@ def apply_compressor(
     if audio_data.ndim > 1:
         gain_linear = gain_linear[:, None]
 
-    output = audio_data * gain_linear
+    output = (
+        audio_data
+        * gain_linear
+    )
+
+    if return_gain_reduction:
+        return (
+            output,
+            smoothed_gain_db,
+        )
 
     return output
