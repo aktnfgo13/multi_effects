@@ -1,2 +1,5 @@
+matplotlib==3.11.1
+matplotlib-inline==0.2.2
 numpy==2.5.3
+scipy==1.18.0
 soundfile==0.14.0

@@ -3,3 +3,5 @@ audio/input/*.wav
 audio/output/*.wav
 __pycache__/
 *.pyc
+audio/ir/*.wav
+!audio/ir/.gitkeep
