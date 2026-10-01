@@ -4,4 +4,4 @@ audio/output/*.wav
 __pycache__/
 *.pyc
 audio/ir/*.wav
-!audio/ir/.gitkeep
+!audio/ir/.gitkeep*.egg-info/
