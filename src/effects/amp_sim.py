@@ -3,15 +3,22 @@ import numpy as np
 from effects.filters import (
     high_pass_filter,
     low_pass_filter,
+    low_shelf_filter,
+    high_shelf_filter,
+)
+
+from effects.eq import (
+    peaking_eq,
 )
 
 
 def db_to_linear(db):
-    """
-    dB 값을 Linear Gain으로 변환
-    """
     return 10 ** (db / 20)
 
+
+# =========================================================
+# Saturation
+# =========================================================
 
 def _preamp_saturation(
     signal,
@@ -19,16 +26,10 @@ def _preamp_saturation(
     bias,
 ):
     """
-    간단한 Preamp Nonlinear Saturation
+    비대칭 Saturation
 
-    drive:
-        비선형 왜곡 강도
-
-    bias:
-        비대칭 왜곡 정도
-
-    bias를 사용하면 완전히 대칭적인 tanh보다
-    짝수차 고조파가 추가될 수 있다.
+    bias가 0이면 비교적 대칭적이고,
+    bias가 생기면 비대칭 왜곡 성분이 추가된다.
     """
 
     biased_signal = (
@@ -39,17 +40,18 @@ def _preamp_saturation(
         biased_signal * drive
     )
 
-    # DC offset 보정
     dc_reference = np.tanh(
         bias * drive
     )
 
-    saturated = (
+    return (
         saturated - dc_reference
     )
 
-    return saturated
 
+# =========================================================
+# Preamp Channel
+# =========================================================
 
 def _process_preamp_channel(
     signal,
@@ -57,39 +59,22 @@ def _process_preamp_channel(
     drive,
     bias,
 ):
-    """
-    하나의 채널에 Preamp 처리
-    """
-
     gain_linear = db_to_linear(
         gain_db
     )
-
-    # =========================
-    # Input Gain
-    # =========================
 
     stage_input = (
         signal * gain_linear
     )
 
-    # =========================
     # Preamp Stage 1
-    # =========================
-
     stage_1 = _preamp_saturation(
         stage_input,
         drive=drive,
         bias=bias,
     )
 
-    # =========================
     # Preamp Stage 2
-    #
-    # 실제 앰프처럼 여러 증폭 단계를
-    # 흉내내기 위한 간단한 구조
-    # =========================
-
     stage_2 = _preamp_saturation(
         stage_1 * 1.3,
         drive=drive * 0.8,
@@ -99,6 +84,10 @@ def _process_preamp_channel(
     return stage_2
 
 
+# =========================================================
+# Preamp
+# =========================================================
+
 def apply_amp_preamp(
     audio_data,
     sample_rate,
@@ -106,51 +95,10 @@ def apply_amp_preamp(
     drive=1.5,
     bias=0.05,
     low_cut_hz=70.0,
-    high_cut_hz=9000.0,
-    output_db=-6.0,
 ):
     """
-    Amp Sim v0.1 - Preamp
-
-    처리 순서:
-
-    Input
-      ↓
-    HPF
-      ↓
-    Input Gain
-      ↓
-    Saturation Stage 1
-      ↓
-    Saturation Stage 2
-      ↓
-    LPF
-      ↓
-    Output Level
-
-
-    gain_db:
-        Preamp 입력 Gain
-
-    drive:
-        Saturation 강도
-
-    bias:
-        비대칭 Saturation 정도
-
-    low_cut_hz:
-        불필요한 초저역 제거
-
-    high_cut_hz:
-        지나친 고역 제거
-
-    output_db:
-        최종 출력 레벨
+    Amp Preamp Stage
     """
-
-    # =========================
-    # Pre EQ - Low Cut
-    # =========================
 
     filtered = high_pass_filter(
         audio_data,
@@ -158,43 +106,149 @@ def apply_amp_preamp(
         cutoff=low_cut_hz,
     )
 
-    # =========================
-    # Preamp Saturation
-    # =========================
-
     if filtered.ndim == 1:
 
-        processed = (
+        return _process_preamp_channel(
+            filtered,
+            gain_db,
+            drive,
+            bias,
+        )
+
+    processed = np.zeros_like(
+        filtered,
+        dtype=np.float64,
+    )
+
+    for channel in range(
+        filtered.shape[1]
+    ):
+
+        processed[:, channel] = (
             _process_preamp_channel(
-                filtered,
+                filtered[:, channel],
                 gain_db,
                 drive,
                 bias,
             )
         )
 
-    else:
+    return processed
 
-        processed = np.zeros_like(
-            filtered,
-            dtype=np.float64,
-        )
 
-        for channel in range(
-            filtered.shape[1]
-        ):
+# =========================================================
+# Tone Stack
+# =========================================================
 
-            processed[:, channel] = (
-                _process_preamp_channel(
-                    filtered[:, channel],
-                    gain_db,
-                    drive,
-                    bias,
-                )
-            )
+def apply_tone_stack(
+    audio_data,
+    sample_rate,
+    bass_db=0.0,
+    mid_db=0.0,
+    treble_db=0.0,
+):
+    """
+    Amp Tone Stack v0.1
+
+    Bass:
+        Low Shelf
+
+    Mid:
+        Peaking EQ
+
+    Treble:
+        High Shelf
+    """
+
+    processed = low_shelf_filter(
+        audio_data,
+        sample_rate,
+        frequency=180.0,
+        gain_db=bass_db,
+        slope=1.0,
+    )
+
+    processed = peaking_eq(
+        processed,
+        sample_rate,
+        frequency=800.0,
+        gain_db=mid_db,
+        q=0.8,
+    )
+
+    processed = high_shelf_filter(
+        processed,
+        sample_rate,
+        frequency=3500.0,
+        gain_db=treble_db,
+        slope=1.0,
+    )
+
+    return processed
+
+
+# =========================================================
+# Complete Amp Sim v0.1
+# =========================================================
+
+def apply_amp_sim(
+    audio_data,
+    sample_rate,
+    gain_db=12.0,
+    drive=1.5,
+    bias=0.05,
+    bass_db=0.0,
+    mid_db=0.0,
+    treble_db=0.0,
+    low_cut_hz=70.0,
+    high_cut_hz=9000.0,
+    master_db=-6.0,
+):
+    """
+    Amp Sim v0.1
+
+    Input
+      ↓
+    Low Cut
+      ↓
+    Preamp Gain
+      ↓
+    Nonlinear Saturation
+      ↓
+    Bass / Mid / Treble
+      ↓
+    High Cut
+      ↓
+    Master
+    """
 
     # =========================
-    # Post Preamp High Cut
+    # Preamp
+    # =========================
+
+    processed = apply_amp_preamp(
+        audio_data,
+        sample_rate,
+        gain_db=gain_db,
+        drive=drive,
+        bias=bias,
+        low_cut_hz=low_cut_hz,
+    )
+
+    # =========================
+    # Tone Stack
+    # =========================
+
+    processed = apply_tone_stack(
+        processed,
+        sample_rate,
+        bass_db=bass_db,
+        mid_db=mid_db,
+        treble_db=treble_db,
+    )
+
+    # =========================
+    # High Cut
     # =========================
 
     processed = low_pass_filter(
@@ -204,13 +258,13 @@ def apply_amp_preamp(
     )
 
     # =========================
-    # Output Level
+    # Master Level
     # =========================
 
-    output_gain = db_to_linear(
-        output_db
+    master_gain = db_to_linear(
+        master_db
     )
 
-    processed *= output_gain
+    processed *= master_gain
 
     return processed

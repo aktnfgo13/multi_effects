@@ -4,9 +4,8 @@ import numpy as np
 import soundfile as sf
 
 from effects.amp_sim import (
-    apply_amp_preamp,
+    apply_amp_sim,
 )
-
 from effects.cabinet_ir import (
     load_ir,
     apply_cabinet_ir,
@@ -76,17 +75,23 @@ print(
 # Amp Preamp
 # =========================================================
 
-amp_output = apply_amp_preamp(
+amp_output = apply_amp_sim(
     audio_data,
     sample_rate,
+
     gain_db=12.0,
     drive=1.5,
     bias=0.05,
+
+    bass_db=2.0,
+    mid_db=-1.0,
+    treble_db=2.0,
+
     low_cut_hz=70.0,
     high_cut_hz=9000.0,
-    output_db=-6.0,
-)
 
+    master_db=-6.0,
+)
 
 print(
     f"Input Peak  : "
