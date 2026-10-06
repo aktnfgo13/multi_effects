@@ -13,6 +13,9 @@ from analysis.reference_benchmark import (
     match_rms,
 )
 
+from analysis.benchmark_spectrum import (
+    calculate_welch_spectrum,
+)
 
 # =========================================================
 # Prepare Audio
@@ -136,14 +139,12 @@ def create_log_frequency_spectrum(
     points=2000,
 ):
     """
-    FFT 결과를 Log Frequency Grid로 변환한다.
-
-    수백만 개 FFT bin을 그대로 Plot하지 않고
-    약 2000개 지점으로 줄여서 시각화한다.
+    Welch 평균 Spectrum을 계산한 뒤
+    Log Frequency Grid로 변환한다.
     """
 
     frequencies, magnitude_db = (
-        calculate_spectrum(
+        calculate_welch_spectrum(
             audio,
             sample_rate,
         )
@@ -159,8 +160,13 @@ def create_log_frequency_spectrum(
         & (frequencies <= max_frequency)
     )
 
-    frequencies = frequencies[mask]
-    magnitude_db = magnitude_db[mask]
+    frequencies = (
+        frequencies[mask]
+    )
+
+    magnitude_db = (
+        magnitude_db[mask]
+    )
 
     if len(frequencies) < 2:
         raise ValueError(
@@ -183,7 +189,6 @@ def create_log_frequency_spectrum(
         log_frequencies,
         interpolated_db,
     )
-
 
 # =========================================================
 # Spectrum Plot

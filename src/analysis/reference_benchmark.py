@@ -5,8 +5,13 @@ from scipy.signal import (
     correlate,
     correlation_lags,
 )
+from analysis.benchmark_spectrum import (
+    calculate_welch_spectral_metrics,
+)
 
-
+from analysis.benchmark_bands import (
+    calculate_band_metrics,
+)
 # =========================================================
 # Audio Loading
 # =========================================================
@@ -886,6 +891,17 @@ def compare_audio(
         target,
     )
 
+    # -----------------------------------------------------
+    # Frequency Band Analysis
+    # -----------------------------------------------------
+
+    band_results = (
+        calculate_band_metrics(
+            reference,
+            target_matched,
+            reference_sr,
+        )
+    )
 
     # -----------------------------------------------------
     # Correlation After Alignment
@@ -904,7 +920,7 @@ def compare_audio(
     # -----------------------------------------------------
 
     spectral_results = (
-        calculate_spectral_metrics(
+        calculate_welch_spectral_metrics(
             reference,
             target_matched,
             reference_sr,
@@ -1026,5 +1042,9 @@ def compare_audio(
     results.update(
         spectral_results
     )
+
+    results[
+    "frequency_bands"
+    ] = band_results
 
     return results
