@@ -1,7 +1,17 @@
 .DS_Store
+
+# Audio
 audio/input/*.wav
 audio/output/*.wav
+audio/ir/*.wav
+!audio/ir/.gitkeep
+
+# Python
 __pycache__/
 *.pyc
-audio/ir/*.wav
-!audio/ir/.gitkeep*.egg-info/
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# C++ build
+cpp/build/
