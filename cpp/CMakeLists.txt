@@ -33,6 +33,8 @@ add_library(
 
     src/effects/Gain.cpp
     src/effects/Distortion.cpp
+    src/effects/Biquad.cpp
+    src/effects/Filters.cpp
 )
 
 
@@ -62,16 +64,12 @@ endif()
 
 add_executable(
     gain_cli
-
     tools/gain_cli.cpp
 )
 
-
 target_link_libraries(
     gain_cli
-
     PRIVATE
-
     multi_effects_dsp
 )
 
@@ -82,16 +80,28 @@ target_link_libraries(
 
 add_executable(
     distortion_cli
-
     tools/distortion_cli.cpp
 )
 
-
 target_link_libraries(
     distortion_cli
-
     PRIVATE
+    multi_effects_dsp
+)
 
+
+# =========================================================
+# Filter CLI
+# =========================================================
+
+add_executable(
+    filter_cli
+    tools/filter_cli.cpp
+)
+
+target_link_libraries(
+    filter_cli
+    PRIVATE
     multi_effects_dsp
 )
 
@@ -108,9 +118,14 @@ if(MSVC)
         /utf-8
     )
 
-
     target_compile_options(
         distortion_cli
+        PRIVATE
+        /utf-8
+    )
+
+    target_compile_options(
+        filter_cli
         PRIVATE
         /utf-8
     )
@@ -125,34 +140,54 @@ endif()
 enable_testing()
 
 
+# Gain
 add_executable(
     test_gain
-
     tests/test_gain.cpp
 )
 
-
 target_link_libraries(
     test_gain
-
     PRIVATE
-
     multi_effects_dsp
 )
 
 
+# Distortion
 add_executable(
     test_distortion
-
     tests/test_distortion.cpp
 )
 
-
 target_link_libraries(
     test_distortion
-
     PRIVATE
+    multi_effects_dsp
+)
 
+
+# Biquad
+add_executable(
+    test_biquad
+    tests/test_biquad.cpp
+)
+
+target_link_libraries(
+    test_biquad
+    PRIVATE
+    multi_effects_dsp
+)
+
+
+# Filters
+add_executable(
+    test_filters
+    tests/test_filters.cpp
+)
+
+target_link_libraries(
+    test_filters
+    PRIVATE
     multi_effects_dsp
 )
 
@@ -169,9 +204,20 @@ if(MSVC)
         /utf-8
     )
 
-
     target_compile_options(
         test_distortion
+        PRIVATE
+        /utf-8
+    )
+
+    target_compile_options(
+        test_biquad
+        PRIVATE
+        /utf-8
+    )
+
+    target_compile_options(
+        test_filters
         PRIVATE
         /utf-8
     )
@@ -188,8 +234,17 @@ add_test(
     COMMAND test_gain
 )
 
-
 add_test(
     NAME DistortionTest
     COMMAND test_distortion
+)
+
+add_test(
+    NAME BiquadTest
+    COMMAND test_biquad
+)
+
+add_test(
+    NAME FilterTest
+    COMMAND test_filters
 )
