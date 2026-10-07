@@ -32,6 +32,7 @@ add_library(
     multi_effects_dsp
 
     src/effects/Gain.cpp
+    src/effects/Distortion.cpp
 )
 
 
@@ -75,10 +76,41 @@ target_link_libraries(
 )
 
 
+# =========================================================
+# Distortion CLI
+# =========================================================
+
+add_executable(
+    distortion_cli
+
+    tools/distortion_cli.cpp
+)
+
+
+target_link_libraries(
+    distortion_cli
+
+    PRIVATE
+
+    multi_effects_dsp
+)
+
+
+# =========================================================
+# MSVC CLI Settings
+# =========================================================
+
 if(MSVC)
 
     target_compile_options(
         gain_cli
+        PRIVATE
+        /utf-8
+    )
+
+
+    target_compile_options(
+        distortion_cli
         PRIVATE
         /utf-8
     )
@@ -109,6 +141,26 @@ target_link_libraries(
 )
 
 
+add_executable(
+    test_distortion
+
+    tests/test_distortion.cpp
+)
+
+
+target_link_libraries(
+    test_distortion
+
+    PRIVATE
+
+    multi_effects_dsp
+)
+
+
+# =========================================================
+# MSVC Test Settings
+# =========================================================
+
 if(MSVC)
 
     target_compile_options(
@@ -117,10 +169,27 @@ if(MSVC)
         /utf-8
     )
 
+
+    target_compile_options(
+        test_distortion
+        PRIVATE
+        /utf-8
+    )
+
 endif()
 
+
+# =========================================================
+# Register Tests
+# =========================================================
 
 add_test(
     NAME GainTest
     COMMAND test_gain
+)
+
+
+add_test(
+    NAME DistortionTest
+    COMMAND test_distortion
 )
