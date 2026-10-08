@@ -35,6 +35,7 @@ add_library(
     src/effects/Distortion.cpp
     src/effects/Biquad.cpp
     src/effects/Filters.cpp
+    src/effects/Compressor.cpp
 )
 
 
@@ -46,6 +47,10 @@ target_include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+
+# =========================================================
+# MSVC Library Settings
+# =========================================================
 
 if(MSVC)
 
@@ -107,6 +112,22 @@ target_link_libraries(
 
 
 # =========================================================
+# Compressor CLI
+# =========================================================
+
+add_executable(
+    compressor_cli
+    tools/compressor_cli.cpp
+)
+
+target_link_libraries(
+    compressor_cli
+    PRIVATE
+    multi_effects_dsp
+)
+
+
+# =========================================================
 # MSVC CLI Settings
 # =========================================================
 
@@ -130,6 +151,12 @@ if(MSVC)
         /utf-8
     )
 
+    target_compile_options(
+        compressor_cli
+        PRIVATE
+        /utf-8
+    )
+
 endif()
 
 
@@ -140,7 +167,10 @@ endif()
 enable_testing()
 
 
-# Gain
+# ---------------------------------------------------------
+# Gain Test
+# ---------------------------------------------------------
+
 add_executable(
     test_gain
     tests/test_gain.cpp
@@ -153,7 +183,10 @@ target_link_libraries(
 )
 
 
-# Distortion
+# ---------------------------------------------------------
+# Distortion Test
+# ---------------------------------------------------------
+
 add_executable(
     test_distortion
     tests/test_distortion.cpp
@@ -166,7 +199,10 @@ target_link_libraries(
 )
 
 
-# Biquad
+# ---------------------------------------------------------
+# Biquad Test
+# ---------------------------------------------------------
+
 add_executable(
     test_biquad
     tests/test_biquad.cpp
@@ -179,7 +215,10 @@ target_link_libraries(
 )
 
 
-# Filters
+# ---------------------------------------------------------
+# Filter Test
+# ---------------------------------------------------------
+
 add_executable(
     test_filters
     tests/test_filters.cpp
@@ -187,6 +226,22 @@ add_executable(
 
 target_link_libraries(
     test_filters
+    PRIVATE
+    multi_effects_dsp
+)
+
+
+# ---------------------------------------------------------
+# Compressor Test
+# ---------------------------------------------------------
+
+add_executable(
+    test_compressor
+    tests/test_compressor.cpp
+)
+
+target_link_libraries(
+    test_compressor
     PRIVATE
     multi_effects_dsp
 )
@@ -222,6 +277,12 @@ if(MSVC)
         /utf-8
     )
 
+    target_compile_options(
+        test_compressor
+        PRIVATE
+        /utf-8
+    )
+
 endif()
 
 
@@ -247,4 +308,9 @@ add_test(
 add_test(
     NAME FilterTest
     COMMAND test_filters
+)
+
+add_test(
+    NAME CompressorTest
+    COMMAND test_compressor
 )
