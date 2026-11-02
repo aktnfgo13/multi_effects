@@ -63,7 +63,7 @@ void Filter::setLowPass(
         a2
     );
 
-    biquad_.reset();
+    if (!retainState_) biquad_.reset();
 }
 
 
@@ -119,7 +119,7 @@ void Filter::setHighPass(
         a2
     );
 
-    biquad_.reset();
+    if (!retainState_) biquad_.reset();
 }
 
 
@@ -219,7 +219,7 @@ void Filter::setLowShelf(
         a2
     );
 
-    biquad_.reset();
+    if (!retainState_) biquad_.reset();
 }
 
 
@@ -319,7 +319,7 @@ void Filter::setHighShelf(
         a2
     );
 
-    biquad_.reset();
+    if (!retainState_) biquad_.reset();
 }
 
 
@@ -385,7 +385,7 @@ void Filter::setPeaking(
         a2
     );
 
-    biquad_.reset();
+    if (!retainState_) biquad_.reset();
 }
 
 

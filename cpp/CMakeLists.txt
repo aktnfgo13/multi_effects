@@ -36,6 +36,7 @@ add_library(
     src/effects/Biquad.cpp
     src/effects/Filters.cpp
     src/effects/Compressor.cpp
+    src/effects/NoiseGate.cpp
 )
 
 
@@ -166,6 +167,15 @@ endif()
 
 enable_testing()
 
+add_executable(noise_gate_cli tools/noise_gate_cli.cpp)
+target_link_libraries(noise_gate_cli PRIVATE multi_effects_dsp)
+add_executable(test_noise_gate_stream tests/test_noise_gate_stream.cpp)
+target_link_libraries(test_noise_gate_stream PRIVATE multi_effects_dsp)
+add_test(NAME NoiseGateStreamTest COMMAND test_noise_gate_stream)
+if(MSVC)
+    target_compile_options(noise_gate_cli PRIVATE /utf-8)
+endif()
+
 
 # ---------------------------------------------------------
 # Gain Test
@@ -247,6 +257,22 @@ target_link_libraries(
 )
 
 
+# ---------------------------------------------------------
+# Noise Gate Test
+# ---------------------------------------------------------
+
+add_executable(
+    test_noise_gate
+    tests/test_noise_gate.cpp
+)
+
+target_link_libraries(
+    test_noise_gate
+    PRIVATE
+    multi_effects_dsp
+)
+
+
 # =========================================================
 # MSVC Test Settings
 # =========================================================
@@ -283,6 +309,12 @@ if(MSVC)
         /utf-8
     )
 
+    target_compile_options(
+        test_noise_gate
+        PRIVATE
+        /utf-8
+    )
+
 endif()
 
 
@@ -314,3 +346,31 @@ add_test(
     NAME CompressorTest
     COMMAND test_compressor
 )
+
+add_test(
+    NAME NoiseGateTest
+    COMMAND test_noise_gate
+)
+
+add_executable(prototype_cli tools/prototype_cli.cpp)
+target_link_libraries(prototype_cli PRIVATE multi_effects_dsp)
+
+target_sources(multi_effects_dsp PRIVATE src/engine/Engine.cpp)
+
+option(MULTI_EFFECTS_BUILD_APP "Build JUCE standalone prototype" OFF)
+if(MULTI_EFFECTS_BUILD_APP)
+    enable_language(C)
+    add_subdirectory(app)
+endif()
+
+add_executable(test_engine tests/test_engine.cpp)
+target_link_libraries(test_engine PRIVATE multi_effects_dsp)
+add_test(NAME EngineTest COMMAND test_engine)
+# Legacy assert-based tests must remain active in Release as well.
+foreach(test_target test_gain test_distortion test_biquad test_filters test_compressor test_noise_gate)
+    if(MSVC)
+        target_compile_options(${test_target} PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(${test_target} PRIVATE -UNDEBUG)
+    endif()
+endforeach()

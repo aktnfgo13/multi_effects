@@ -43,6 +43,9 @@ public:
         float q = 1.0f
     );
 
+    // Opt-in for realtime coefficient updates; legacy setters still reset by default.
+    void setRetainStateOnUpdate(bool retain) { retainState_ = retain; }
+
     void reset();
 
     float processSample(float input);
@@ -54,6 +57,7 @@ public:
 
 private:
     Biquad biquad_;
+    bool retainState_ = false;
 };
 
 }
