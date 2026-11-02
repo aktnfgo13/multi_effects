@@ -374,3 +374,17 @@ foreach(test_target test_gain test_distortion test_biquad test_filters test_comp
         target_compile_options(${test_target} PRIVATE -UNDEBUG)
     endif()
 endforeach()
+
+find_package(Threads REQUIRED)
+add_executable(test_stability tests/test_stability.cpp)
+target_link_libraries(test_stability PRIVATE multi_effects_dsp Threads::Threads)
+add_test(NAME BlockSampleRateMatrix COMMAND test_stability matrix)
+add_test(NAME ChainStress COMMAND test_stability stress)
+add_test(NAME ConcurrentParameterUpdates COMMAND test_stability controls)
+add_test(NAME OfflineLongRun COMMAND test_stability long 600)
+set_tests_properties(OfflineLongRun PROPERTIES TIMEOUT 600 LABELS "long")
+# Preserve sanitizer allocator redzones; allocation accounting is tested separately
+# by the normal Release executable, not by sanitizer builds.
+if(CMAKE_CXX_FLAGS MATCHES "fsanitize")
+    target_compile_definitions(test_stability PRIVATE MULTI_EFFECTS_TEST_SANITIZER=1)
+endif()

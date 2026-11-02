@@ -241,3 +241,5 @@ print()
 print(
     "========================================"
 )
+if not is_match:
+    raise AssertionError("Gain comparison mismatch.")

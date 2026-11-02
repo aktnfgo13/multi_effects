@@ -1,7 +1,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "engine/Engine.h"
-#include <set>
+#include "PresetIO.h"
 using namespace multi_effects;
 
 class MainComponent final : public juce::Component, private juce::AudioIODeviceCallback,
@@ -96,56 +96,9 @@ private:
         }
         resized();
     }
-    juce::var preset() const
-    {
-        auto root = std::make_unique<juce::DynamicObject>(); root->setProperty("version", 3); root->setProperty("schema", "multi-effects");
-        juce::Array<juce::var> effects;
-        for (const auto& e : chain.effects)
-        {
-            auto item = std::make_unique<juce::DynamicObject>();
-            item->setProperty("id", juce::String(e->id)); item->setProperty("type", juce::String(e->type)); item->setProperty("name", juce::String(e->name)); item->setProperty("bypass", e->bypass.load());
-            auto params = std::make_unique<juce::DynamicObject>();
-            for (const auto& p : e->parameters) params->setProperty(juce::Identifier(juce::String(p->info.id)), double(p->target.load()));
-            if (!e->impulseResponse.empty())
-            {
-                juce::Array<juce::var> ir; for (float x : e->impulseResponse) ir.add(double(x));
-                item->setProperty("ir", ir); item->setProperty("ir_sample_rate", e->impulseSampleRate);
-            }
-            item->setProperty("parameters", juce::var(params.release())); effects.add(juce::var(item.release()));
-        }
-        root->setProperty("effects", effects); return juce::var(root.release());
-    }
     void loadPreset(const juce::File& file)
     {
-        auto json = juce::JSON::parse(file);
-        const int version = int(json["version"]);
-        if (version == 3 && json["schema"].toString() != "multi-effects") throw std::runtime_error("Unknown preset schema");
-        if ((version != 2 && version != 3) || !json["effects"].isArray()) throw std::runtime_error("Expected preset version 2 or 3");
-        Chain replacement; std::set<std::string> ids;
-        for (const auto& value : *json["effects"].getArray())
-        {
-            if (replacement.effects.size() >= 24) throw std::runtime_error("Maximum 24 effects");
-            const auto id = value["id"].toString().toStdString();
-            if (id.empty() || !ids.insert(id).second) throw std::runtime_error("Invalid/duplicate effect ID");
-            auto e = createEffect(value["type"].toString().toStdString(), id);
-            if (value["name"].isString() && value["name"].toString().isNotEmpty()) e->name = value["name"].toString().toStdString();
-            e->bypass.store(bool(value["bypass"]));
-            if (auto* params = value["parameters"].getDynamicObject())
-                for (const auto& prop : params->getProperties())
-                {
-                    auto* p = e->parameter(prop.name.toString().toStdString());
-                    if (!p) throw std::runtime_error("Unsupported parameter: " + prop.name.toString().toStdString());
-                    if (!(prop.value.isDouble() || prop.value.isInt() || prop.value.isInt64()) || !std::isfinite(double(prop.value))) throw std::runtime_error("Invalid parameter value");
-                    p->set(float(double(prop.value)));
-                }
-            if (auto* ir = value["ir"].getArray())
-            {
-                if (e->type != "cabinet" || ir->isEmpty() || ir->size() > 32768) throw std::runtime_error("Invalid embedded IR");
-                e->impulseSampleRate = double(value["ir_sample_rate"]);
-                for (const auto& x : *ir) { if (!std::isfinite(double(x))) throw std::runtime_error("Invalid IR sample"); e->impulseResponse.push_back(float(double(x))); }
-            }
-            replacement.effects.push_back(std::move(e));
-        }
+        auto replacement = multi_effects::app::loadPreset(file);
         if (auto* device = manager.getCurrentAudioDevice()) replacement.prepare({device->getCurrentSampleRate(), std::size_t(std::max(1, device->getCurrentBufferSizeSamples()))});
         edit([&] { chain.effects.swap(replacement.effects); }); refresh();
     }
@@ -160,20 +113,9 @@ private:
                 if (!safe || fc.getResult() == juce::File()) return;
                 try
                 {
-                    juce::AudioFormatManager formats; formats.registerBasicFormats();
-                    std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(fc.getResult()));
-                    if (!reader || reader->lengthInSamples < 1 || reader->lengthInSamples > 32768) throw std::runtime_error("IR must have 1..32768 samples");
-                    juce::AudioBuffer<float> buffer(int(reader->numChannels), int(reader->lengthInSamples));
-                    if (!reader->read(&buffer, 0, buffer.getNumSamples(), 0, true, true)) throw std::runtime_error("IR read failed");
-                    std::vector<float> ir(std::size_t(buffer.getNumSamples()), 0);
-                    double mean = 0;
-                    for (int i=0;i<buffer.getNumSamples();++i) { for(int c=0;c<buffer.getNumChannels();++c) ir[std::size_t(i)] += buffer.getSample(c,i)/float(buffer.getNumChannels()); mean += ir[std::size_t(i)]; }
-                    mean /= double(ir.size()); float peak = 0;
-                    for(auto& x:ir) { x -= float(mean); if(!std::isfinite(x)) throw std::runtime_error("Non-finite IR"); peak=std::max(peak,std::abs(x)); }
-                    if(peak <= 0) throw std::runtime_error("IR has no signal after DC removal");
-                    for(auto& x:ir) x /= peak;
-                    if(auto* device=safe->manager.getCurrentAudioDevice()) if(ir.size()*device->getCurrentSampleRate()/reader->sampleRate > 32768) throw std::runtime_error("Resampled IR too long");
-                    safe->edit([&] { for(auto& e:safe->chain.effects) if(e->id==id) { e->impulseResponse=ir; e->impulseSampleRate=reader->sampleRate; } });
+                    auto asset = multi_effects::app::loadImpulse(fc.getResult());
+                    if(auto* device=safe->manager.getCurrentAudioDevice()) if(asset.samples.size()*device->getCurrentSampleRate()/asset.sampleRate > 32768) throw std::runtime_error("Resampled IR too long");
+                    safe->edit([&] { for(auto& e:safe->chain.effects) if(e->id==id) { e->impulseResponse=asset.samples; e->impulseSampleRate=asset.sampleRate; } });
                     safe->status.setText("IR loaded: " + fc.getResult().getFileName(), juce::dontSendNotification);
                 }
                 catch(const std::exception& e) { safe->status.setText(e.what(), juce::dontSendNotification); }
@@ -189,7 +131,7 @@ private:
                 try
                 {
                     if (loading) safe->loadPreset(fc.getResult());
-                    else if (!fc.getResult().withFileExtension("json").replaceWithText(juce::JSON::toString(safe->preset()))) throw std::runtime_error("Cannot save preset");
+                    else multi_effects::app::savePreset(safe->chain, fc.getResult().withFileExtension("json"));
                     safe->status.setText("Preset " + juce::String(loading ? "loaded" : "saved"), juce::dontSendNotification);
                 }
                 catch (const std::exception& e) { safe->status.setText(e.what(), juce::dontSendNotification); }

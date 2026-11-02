@@ -38,6 +38,7 @@ public:
     }
     void reset() override
     {
+        invalidSampleCount = 0;
         for (std::size_t i = 0; i < parameters.size(); ++i) values_[i] = parameters[i]->target.load();
         processor_ = definition_.create(spec_.sampleRate, values_);
         if (type == "cabinet" && !impulseResponse.empty())
@@ -93,7 +94,7 @@ public:
                 dryIndex_ = (dryIndex_ + 1) % dryDelay_.size();
             }
             data[n] = alignedDry + wet_ * (processed - alignedDry);
-            if (!std::isfinite(data[n])) data[n] = 0;
+            if (!std::isfinite(data[n])) { ++invalidSampleCount; data[n] = 0; }
         }
     }
 private:

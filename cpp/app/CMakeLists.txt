@@ -13,3 +13,10 @@ juce_add_gui_app(MultiEffectsStandalone
 target_sources(MultiEffectsStandalone PRIVATE Main.cpp)
 target_compile_definitions(MultiEffectsStandalone PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:MultiEffectsStandalone,JUCE_PRODUCT_NAME>" JUCE_APPLICATION_VERSION_STRING="0.1.0")
 target_link_libraries(MultiEffectsStandalone PRIVATE multi_effects_dsp juce::juce_audio_utils juce::juce_gui_extra)
+
+# Shared application IO: tests exercise the same implementation as the GUI.
+target_sources(MultiEffectsStandalone PRIVATE PresetIO.cpp)
+add_executable(test_preset_ir ../tests/test_preset_ir.cpp PresetIO.cpp)
+target_compile_definitions(test_preset_ir PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_link_libraries(test_preset_ir PRIVATE multi_effects_dsp juce::juce_audio_formats)
+add_test(NAME PresetIRRoundtrip COMMAND test_preset_ir)

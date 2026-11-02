@@ -35,6 +35,8 @@ public:
     // Prepared only while callback is stopped. Raw asset data is serialized outside DSP.
     std::vector<float> impulseResponse;
     double impulseSampleRate = 44100;
+    // Audio-thread diagnostic. Read only after processing is stopped.
+    std::size_t invalidSampleCount = 0;
 };
 using SampleProcessor = std::function<float(float, const std::vector<float>&)>;
 struct EffectDefinition
