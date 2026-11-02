@@ -1,3 +1,14 @@
+# macOS Standalone Prototype
+
+A runnable JUCE standalone prototype now connects the independent C++17 DSP core
+with device selection, a reorderable mono effect chain, metadata-driven controls,
+bypass, cabinet WAV IR loading, and versioned JSON presets.
+
+Build and operation: [Standalone prototype guide](docs/standalone-prototype.md).
+The app starts muted. The Python research/reference implementation below is preserved.
+
+---
+
 # 🎸 Multi-Effects DSP Project
 
 기타용 소프트웨어 멀티이펙터를 직접 설계하고 구현하는 개인 프로젝트입니다.
