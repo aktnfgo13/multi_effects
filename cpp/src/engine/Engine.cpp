@@ -23,7 +23,7 @@ Parameter* Effect::parameter(const std::string& key)
 class Builtin final : public Effect
 {
 public:
-    explicit Builtin(const EffectDefinition& d) : definition_(d)
+    explicit Builtin(const EffectDefinition& d) : definition_(d), cabinetLatency_(d.type == "cabinet")
     {
         type = d.type; name = d.name;
         for (const auto& p : d.parameters) parameters.push_back(std::make_unique<Parameter>(p));
@@ -88,7 +88,7 @@ public:
             const float dry = data[n];
             const float processed = processor_(dry, values_);
             float alignedDry = dry;
-            if (type == "cabinet")
+            if (cabinetLatency_)
             {
                 alignedDry = dryDelay_[dryIndex_]; dryDelay_[dryIndex_] = dry;
                 dryIndex_ = (dryIndex_ + 1) % dryDelay_.size();
@@ -99,6 +99,7 @@ public:
     }
 private:
     EffectDefinition definition_;
+    const bool cabinetLatency_;
     ProcessSpec spec_;
     SampleProcessor processor_;
     std::vector<float> values_;

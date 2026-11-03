@@ -1,6 +1,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "engine/Engine.h"
+#include "engine/AudioIO.h"
 #include "PresetIO.h"
 using namespace multi_effects;
 
@@ -8,7 +9,7 @@ class MainComponent final : public juce::Component, private juce::AudioIODeviceC
                             private juce::ListBoxModel, private juce::Timer
 {
 public:
-    MainComponent() : list("Effects", this), devices(manager, 0, 2, 0, 2, false, false, true, false)
+    MainComponent() : list("Effects", this), devices(manager, 0, 256, 0, 256, false, false, true, false)
     {
         for (const auto& type : {"noise_gate", "compressor", "gain", "distortion", "eq", "amp_sim", "cabinet", "delay", "reverb"})
             chain.effects.push_back(createEffect(type, std::string(type) + "_1"));
@@ -19,15 +20,32 @@ public:
         types.setSelectedId(1);
         title.setText("Multi Effects | Mono guitar -> stereo output", juce::dontSendNotification);
         mute.setToggleState(true, juce::dontSendNotification);
-        mute.onClick = [this] { muted.store(mute.getToggleState()); };
+        mute.onClick = [this] { audioIO.muted.store(mute.getToggleState()); };
         bypass.onClick = [this] { if (auto* e = selected()) e->bypass.store(bypass.getToggleState()); };
         up.onClick = [this] { move(-1); }; down.onClick = [this] { move(1); };
         remove.onClick = [this] { const int row = list.getSelectedRow(); if (row < 0) return; edit([&] { chain.effects.erase(chain.effects.begin() + row); }); refresh(); };
         add.onClick = [this] { if (chain.effects.size() >= 24) return; edit([&] { const auto& d = registry().at(std::size_t(types.getSelectedId()-1)); chain.effects.push_back(createEffect(d.type, juce::Uuid().toString().toStdString())); }); refresh(); };
         irLoad.onClick = [this] { chooseIR(); };
         save.onClick = [this] { choosePreset(false); }; load.onClick = [this] { choosePreset(true); };
-        setSize(1050, 760);
-        const auto error = manager.initialise(1, 2, nullptr, true);
+        addAndMakeVisible(inputSelector); addAndMakeVisible(levels); addAndMakeVisible(audioStatus);
+        inputSelector.onChange = [this]
+        {
+            const int channel = inputSelector.getSelectedId() - 1;
+            if (channel < 0) return;
+            auto* device = manager.getCurrentAudioDevice();
+            if (!device || channel >= device->getInputChannelNames().size()) return;
+            // JUCE packs only enabled channels into callback pointers.
+            if (!device->getActiveInputChannels()[channel])
+            {
+                auto setup = manager.getAudioDeviceSetup();
+                setup.useDefaultInputChannels = false; setup.inputChannels.setBit(channel);
+                const auto error = manager.setAudioDeviceSetup(setup, true);
+                if (error.isNotEmpty()) { status.setText(error, juce::dontSendNotification); return; }
+            }
+            audioIO.selectedInput.store(channel);
+        };
+        setSize(1050, 820);
+        const auto error = manager.initialise(2, 2, nullptr, true);
         status.setText(error.isEmpty() ? "Output muted - select input/output, use headphones, then unmute." : error, juce::dontSendNotification);
         manager.addAudioCallback(this);
         refresh(); startTimerHz(10);
@@ -47,7 +65,10 @@ public:
         }
         save.setBounds(15, 380, 125, 30); load.setBounds(150, 380, 130, 30);
         devices.setBounds(15, 430, 1015, 275);
-        status.setBounds(15, 715, 1015, 35);
+        inputSelector.setBounds(15, 710, 260, 28);
+        audioStatus.setBounds(290, 710, 740, 28);
+        levels.setBounds(15, 745, 1015, 28);
+        status.setBounds(15, 780, 1015, 30);
     }
 private:
     Effect* selected() { const int r = list.getSelectedRow(); return r >= 0 && r < int(chain.effects.size()) ? chain.effects[std::size_t(r)].get() : nullptr; }
@@ -139,42 +160,51 @@ private:
     }
     void audioDeviceAboutToStart(juce::AudioIODevice* device) override
     {
-        ready = false;
+        preparationFailed.store(false);
         try
         {
-            const auto block = std::size_t(std::max(1, device->getCurrentBufferSizeSamples()));
-            scratch.assign(block, 0); chain.prepare({device->getCurrentSampleRate(), block}); ready = true;
+            std::vector<int> active;
+            const auto mask = device->getActiveInputChannels();
+            for (int c = 0; c < device->getInputChannelNames().size(); ++c)
+                if (mask[c]) active.push_back(c);
+            audioIO.prepare(chain, {device->getCurrentSampleRate(), std::size_t(std::max(1, device->getCurrentBufferSizeSamples()))}, std::move(active));
         }
-        catch (...) { ready = false; }
+        catch (...) { audioIO.stop(); preparationFailed.store(true); }
     }
-    void audioDeviceStopped() override { ready = false; }
+    void audioDeviceStopped() override { audioIO.stop(); }
     void audioDeviceIOCallbackWithContext(const float* const* input, int inputs, float* const* output, int outputs, int count, const juce::AudioIODeviceCallbackContext&) override
     {
         juce::ScopedNoDenormals noDenormals;
-        if (!ready || scratch.empty()) { for (int c=0;c<outputs;++c) if(output[c]) juce::FloatVectorOperations::clear(output[c], count); return; }
-        float peak = 0;
-        for (int start = 0; start < count;)
-        {
-            const int n = std::min(count - start, int(scratch.size()));
-            for (int i=0;i<n;++i) scratch[std::size_t(i)] = inputs > 0 && input[0] ? input[0][start+i] : 0;
-            chain.process(scratch.data(), std::size_t(n));
-            for (int i=0;i<n;++i)
-            {
-                const float target = muted.load(std::memory_order_relaxed) ? 0.f : .5f;
-                outputGain += .002f * (target - outputGain);
-                const float y = std::clamp(scratch[std::size_t(i)] * outputGain, -1.f, 1.f);
-                peak = std::max(peak, std::abs(y));
-                for (int c=0;c<outputs;++c) if(output[c]) output[c][start+i] = y;
-            }
-            start += n;
-        }
-        meter.store(peak, std::memory_order_relaxed);
+        audioIO.process(chain, {input, inputs, output, outputs, std::size_t(std::max(0, count))});
         callbackCount.fetch_add(1, std::memory_order_relaxed);
     }
     void timerCallback() override
     {
-        mute.setButtonText("Mute | " + juce::String(meter.load(), 3));
-        title.setText("Multi Effects | Mono -> stereo | blocks " + juce::String(callbackCount.load())
+        juce::StringArray names;
+        auto* device = manager.getCurrentAudioDevice();
+        if (device) names = device->getInputChannelNames();
+        if (names != inputNames)
+        {
+            inputNames = names; inputSelector.clear(juce::dontSendNotification);
+            for (int c = 0; c < names.size(); ++c)
+                inputSelector.addItem("Input " + juce::String(c + 1) + " | " + names[c], c + 1);
+        }
+        inputSelector.setEnabled(!names.isEmpty());
+        inputSelector.setTextWhenNothingSelected("No input channel");
+        const int selected = audioIO.selectedInput.load();
+        inputSelector.setSelectedId(selected >= 0 && selected < names.size() ? selected + 1 : 0, juce::dontSendNotification);
+        audioStatus.setText((device ? juce::String(device->getCurrentSampleRate(), 0) + " Hz | "
+                            + juce::String(device->getCurrentBufferSizeSamples()) + " samples" : "No audio device")
+                            + (audioIO.muted.load() ? " | MUTED" : " | OUTPUT ON")
+                            + (preparationFailed.load() ? " | PREPARE FAILED: check IR/rate" : ""), juce::dontSendNotification);
+        const auto in = audioIO.inputLevel.consume(), out = audioIO.outputLevel.consume();
+        inputClipTicks = in.clipped ? 20 : std::max(0, inputClipTicks - 1);
+        outputClipTicks = out.clipped ? 20 : std::max(0, outputClipTicks - 1);
+        const auto levelText = [](float peak) { return peak > 0 ? juce::String(20 * std::log10(peak), 1) + " dBFS" : juce::String("-inf dBFS"); };
+        levels.setText("Input " + levelText(in.peak) + (inputClipTicks ? " [CLIP]" : "")
+                       + "    Output " + levelText(out.peak) + (outputClipTicks ? " [CLIP]" : "")
+                       + (in.invalid || out.invalid ? " [INVALID SAMPLE]" : ""), juce::dontSendNotification);
+        title.setText("Multi Effects v0.2 | Selected mono -> outputs | blocks " + juce::String(callbackCount.load())
                       + " | CPU " + juce::String(manager.getCpuUsage() * 100, 1) + "%", juce::dontSendNotification);
     }
     Chain chain;
@@ -183,17 +213,16 @@ private:
     juce::AudioDeviceSelectorComponent devices;
     juce::TextButton up{"Up"}, down{"Down"}, remove{"Remove"}, add{"Add"}, save{"Save preset"}, load{"Load preset"}, irLoad{"Load cabinet IR"};
     juce::ToggleButton mute{"Mute"}, bypass{"Bypass effect"};
-    juce::ComboBox types;
-    juce::Label title, status;
+    juce::ComboBox types, inputSelector;
+    juce::StringArray inputNames;
+    juce::Label title, status, levels, audioStatus;
+    int inputClipTicks = 0, outputClipTicks = 0;
     std::vector<std::unique_ptr<juce::Slider>> sliders;
     std::vector<std::unique_ptr<juce::Label>> labels;
     std::unique_ptr<juce::FileChooser> chooser;
-    std::vector<float> scratch;
-    std::atomic<bool> muted{true};
-    std::atomic<float> meter{0};
-    std::atomic<int> callbackCount{0};
-    bool ready = false;
-    float outputGain = 0;
+    MonoAudioIO audioIO;
+    std::atomic<bool> preparationFailed{false};
+    std::atomic<unsigned int> callbackCount{0};
 };
 class AppWindow final : public juce::DocumentWindow
 {
@@ -205,11 +234,11 @@ class Application final : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return "Multi Effects Prototype"; }
-    const juce::String getApplicationVersion() override { return "0.1.0"; }
+    const juce::String getApplicationVersion() override { return "0.2.0"; }
     void initialise(const juce::String&) override
     {
         window = std::make_unique<AppWindow>(getApplicationName());
-        window->setUsingNativeTitleBar(true); window->setContentOwned(new MainComponent(), true); window->centreWithSize(1050, 760); window->setVisible(true);
+        window->setUsingNativeTitleBar(true); window->setContentOwned(new MainComponent(), true); window->centreWithSize(1050, 820); window->setVisible(true);
     }
     void shutdown() override { window.reset(); }
     void systemRequestedQuit() override { quit(); }
