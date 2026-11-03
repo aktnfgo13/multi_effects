@@ -199,3 +199,99 @@ stereo spatial effects and embedded hardware are outside this prototype implemen
 
 Run the added tests with `ctest --test-dir cpp/build -R AudioIO --output-on-failure`.
 Sanitizer build directories remain under ignored `cpp/build/sanitizers` and `cpp/build/tsan`.
+
+## v0.3 nonlinear foundation
+
+Distortion and Amp expose **Oversampling: 0=1x, 1=2x, 2=4x**. This is a discrete
+prepare-time parameter (default 0), saved under stable ID `oversampling`. Changing
+it stops the callback, reconstructs/prepares the chain and resets tails; do not
+switch modes mid-performance expecting a seamless transition. Core clients must
+apply staged mode targets with stopped prepare/reset. Continuous parameters retain
+20 ms smoothing. Existing v2/v3 presets missing the field default to exact legacy 1x;
+v3 schema and IR data are unchanged. Older application binaries may reject presets
+saved with the new field: backward loading is supported, forward loading is not.
+
+`effects/Oversampler.h` is a JUCE-independent, fixed-capacity C++17 interpolation /
+nonlinearity / decimation utility. 1x calls the original nonlinear transfer directly.
+2x/4x use symmetric Blackman-windowed sinc FIRs of 64*factor+1 taps with cutoff
+0.45/factor cycles per high-rate sample. Coefficients have unity DC sum; interpolation
+uses factor gain and polyphase evaluation. Decimation filters the high-rate nonlinear
+output and samples phase zero. Finite transition bands are intentional (not a
+brick-wall filter); high-frequency response changes and FIR ringing are tradeoffs.
+All storage is embedded/prepared, no process allocation; reset clears histories.
+Non-finite input/nonlinear result is replaced with zero at the oversampling boundary.
+The callback supplied to this utility operates at the elevated rate; the current
+nonlinear islands are memoryless. Stateful future models must explicitly use that rate.
+
+One island adds **64 native samples** at either 2x or 4x. Distortion has one island,
+with delayed dry mix. Amp has two, adding 128 samples. Engine `latencySamples()`
+exposes the prepared latency and bypass dry delay follows it. With one Cabinet the
+full default chain has 128 samples DSP latency at 1x, 320 with both effects enabled
+at 2x/4x (2.67 / 6.67 ms at 48 kHz), excluding device/driver buffers and converters.
+The added 192 samples are 4 ms. Dry latency is retained while bypassed.
+
+Amp analysis: native-rate 70 Hz double-state low-cut -> input gain -> asymmetric
+biased tanh pair (preamp island) -> native bass/mid/treble filters -> tanh power island
+with master gain -> native presence/output gain/low-pass. Bias, stage drives, filter
+voicing and output compensation remain unchanged; no subjective voicing or loudness
+normalizer was added. `AmpSim` remains the algorithm facade behind the same registry
+entry and parameter IDs. A future algorithm can replace its internals without rewriting
+GUI/preset; a tonal/model change should acquire an explicit version/selector rather
+than silently changing old presets. No neural runtime/model framework was introduced.
+
+Gain audit: oversampled Distortion can exceed +/-1 after reconstruction filtering
+(observed peak ~1.13 on the high-tone test), even though tanh itself is bounded. This
+is retained as float headroom, not clamped/normalized away. Dry/wet and bypass are
+time-aligned but not loudness-matched. Compressor makeup, Gain/EQ, custom IR and
+feedback tails can still accumulate gain; the v0.2 final clamp and CLIP indicators
+remain unchanged. Lower gain/output manually when CLIP appears.
+
+Cabinet already uses uniform partitioned FFT convolution (128-frame partitions,
+256-point transforms), so it was not rewritten. A partition must be collected before
+output, explaining its 128-sample delay. At 32768 samples, 256 partitions require
+about 1 MiB for complex<float> kernel/history spectra, plus workspace/source IR;
+frequency-domain MAC work is 32x the default 1024-sample IR, not necessarily 32x
+end-to-end CPU. Resampling remains stopped, windowed-sinc, with 32768 resampled-length
+limit. Existing WAV DC-removal/peak normalization is unchanged, and embedded samples
+are not renormalized on preset reload. Synthetic default IR is not a cabinet capture.
+Long-IR impulse tests compare every sample against known sparse taps, including the
+last partition. Existing WAV/silence/size/rate/preset tests remain enabled.
+
+### Reproduce measurements
+
+```
+cmake --build cpp/build --parallel 4
+.venv/bin/python examples/benchmark_nonlinear.py
+ctest --test-dir cpp/build --output-on-failure
+```
+
+The script reuses `analysis.audio_analysis` and `analysis.harmonic_analysis` and writes
+RMS, peak, THD/harmonics, spectral difference, FFT arrays, alias proxy and CPU profile
+under ignored `cpp/build/v03-analysis`. See [measurement snapshot](nonlinear-benchmark.md).
+It asserts at least 6 dB alias-residual reduction vs 1x for the specified coherent high
+sine in both 2x and 4x. This is not a universal alias bound or subjective sound rating.
+
+v0.3 checks include 72 nonlinear rate/mode/block cases, reset/irregular split,
+latency-aligned bypass, invalid samples, staged mode changes, 32768-tap convolution,
+all three modes' preset roundtrip and old presets' 1x default. Full 4x chain runs
+60 seconds of simulated audio at each 44.1/48/96 kHz with changing block sizes, in
+addition to existing 600-second/rate legacy runs. Separate concurrent controls tests
+run the active 4x processors while changing atomic targets (mode remains staged).
+
+Known limits: FIR CPU/latency is deliberately conservative; a shorter/halfband or IIR
+backend requires new response/phase/alias measurements. Built-in microphone tests do
+not verify external Input 2, audible gain changes, playing feel or hardware latency.
+During initial v0.3 launch one CoreAudio `AudioDeviceStart` hang occurred before DSP
+prepare; restarting only the app recovered. Keep this as a device-init reliability
+issue for external-interface regression, not a proven DSP regression. JUCE framework
+locks, Test-tone Mute bypass and Delay time-transition limitations remain as documented.
+
+Final local v0.3 validation: Release CTest **18/18**, pytest **42/42**, all six existing
+Python/C++ comparison scripts passed without tolerance changes. ASan/UBSan **9/9**
+selected tests and TSan **3/3** concurrency tests passed (including active 4x DSP).
+Debug/Release app builds passed; Debug oversampling/preset tests **2/2** passed.
+The Release GUI ran both nonlinear effects at 4x, 48 kHz/128 samples, muted, with
+callback counter advancing from 8051 to 436612 and live input meter updates. This
+observes liveness, not a hardware dropout counter or audible-quality result. After
+validation the original user's v0.2 preset/embedded IR was restored in the v0.3 GUI,
+returning absent mode fields to 1x. Output remains muted. No commit/push was performed.

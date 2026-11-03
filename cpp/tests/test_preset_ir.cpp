@@ -105,6 +105,21 @@ int main()
         json.getDynamicObject()->removeProperty("schema");
         require(preset.replaceWithText(juce::JSON::toString(json)), "write v2 fixture");
         compare(source, app::loadPreset(preset));
+        for(int mode:{0,1,2}) {
+            auto modes=makeTestChain();for(auto& e:modes.effects)if(auto* p=e->parameter("oversampling"))p->set(float(mode));
+            app::savePreset(modes,directory.getChildFile("modes.json"));
+            auto loaded=app::loadPreset(directory.getChildFile("modes.json"));compare(modes,loaded);
+            loaded.prepare({48000,128});
+            for(auto& e:loaded.effects)if(e->parameter("oversampling"))require(e->latencySamples()==(mode==0?0:e->type=="amp_sim"?128:64),"mode/latency restoration");
+        }
+        // Old v2/v3 presets omit the new discrete mode: retain legacy 1x sound.
+        for(int version:{2,3}) {
+            json=juce::JSON::parse(valid);json.getDynamicObject()->setProperty("version",version);
+            for(auto& node:*json["effects"].getArray())node["parameters"].getDynamicObject()->removeProperty("oversampling");
+            require(preset.replaceWithText(juce::JSON::toString(json)),"legacy preset write");
+            auto old=app::loadPreset(preset);
+            for(auto& e:old.effects)if(auto* p=e->parameter("oversampling"))require(p->target==0,"legacy 1x default");
+        }
         require(preset.replaceWithText("{broken"), "write malformed JSON"); requireRejected([&]{ app::loadPreset(preset); }, "malformed JSON accepted");
         writeWav(wav, true); requireRejected([&]{ app::loadImpulse(wav); }, "silent IR accepted");
         const auto longWav = directory.getChildFile("long.wav"); writeWav(longWav, false, 32769);

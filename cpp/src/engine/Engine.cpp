@@ -13,7 +13,7 @@ static_assert(std::atomic<float>::is_always_lock_free, "Realtime parameter requi
 static_assert(std::atomic<bool>::is_always_lock_free, "Realtime bypass requires lock-free bool");
 void Parameter::set(float value)
 {
-    if (std::isfinite(value)) target.store(std::clamp(value, info.minimum, info.maximum), std::memory_order_relaxed);
+    if (std::isfinite(value)) target.store(std::clamp(info.requiresPrepare ? std::round(value) : value, info.minimum, info.maximum), std::memory_order_relaxed);
 }
 Parameter* Effect::parameter(const std::string& key)
 {
@@ -29,6 +29,7 @@ public:
         for (const auto& p : d.parameters) parameters.push_back(std::make_unique<Parameter>(p));
         values_.resize(parameters.size());
     }
+    std::size_t latencySamples() const noexcept override { return latency_; }
     void prepare(ProcessSpec spec) override
     {
         if (!std::isfinite(spec.sampleRate) || spec.sampleRate < 8000 || spec.sampleRate > 192000 || !spec.maxBlockSize)
@@ -40,6 +41,9 @@ public:
     {
         invalidSampleCount = 0;
         for (std::size_t i = 0; i < parameters.size(); ++i) values_[i] = parameters[i]->target.load();
+        latency_ = cabinetLatency_ ? 128 : 0;
+        if (type == "distortion" || type == "amp_sim")
+            latency_ = values_.back() == 0 ? 0 : (type == "amp_sim" ? 128 : 64);
         processor_ = definition_.create(spec_.sampleRate, values_);
         if (type == "cabinet" && !impulseResponse.empty())
         {
@@ -88,10 +92,10 @@ public:
             const float dry = data[n];
             const float processed = processor_(dry, values_);
             float alignedDry = dry;
-            if (cabinetLatency_)
+            if (latency_)
             {
                 alignedDry = dryDelay_[dryIndex_]; dryDelay_[dryIndex_] = dry;
-                dryIndex_ = (dryIndex_ + 1) % dryDelay_.size();
+                dryIndex_ = (dryIndex_ + 1) % latency_;
             }
             data[n] = alignedDry + wet_ * (processed - alignedDry);
             if (!std::isfinite(data[n])) { ++invalidSampleCount; data[n] = 0; }
@@ -100,6 +104,7 @@ public:
 private:
     EffectDefinition definition_;
     const bool cabinetLatency_;
+    std::size_t latency_ = 0;
     ProcessSpec spec_;
     SampleProcessor processor_;
     std::vector<float> values_;
@@ -116,12 +121,13 @@ const std::vector<EffectDefinition>& registry()
             [](double sr, const auto&) { Compressor c; c.setSampleRate(float(sr)); return [c](float x, const auto& p) mutable { c.setThresholdDb(p[0]); c.setRatio(p[1]); c.setMakeupGainDb(p[2]); return c.processSample(x); }; }},
         {"gain", "Gain (headroom)", {{"gain_db", "Gain", "dB", -60, 24, 0}},
             [](double, const auto&) { return [](float x, const auto& p) { return x * std::pow(10.f, p[0] / 20); }; }},
-        {"distortion", "Distortion", {{"drive_db", "Drive", "dB", 0, 36, 6}, {"mix", "Mix", "", 0, 1, .25f}},
-            [](double, const auto&) { Distortion d; return [d](float x, const auto& p) mutable { d.setDriveDb(p[0]); return x + p[1] * (d.processSample(x) - x); }; }},
+        {"distortion", "Distortion", {{"drive_db", "Drive", "dB", 0, 36, 6}, {"mix", "Mix", "", 0, 1, .25f}, {"oversampling", "Oversampling", "0=1x 1=2x 2=4x", 0, 2, 0, false, true}},
+            [](double, const auto& initial) { Distortion d; Oversampler os; os.prepare(1 << int(initial[2])); SampleDelay dry; dry.reset(os.latencySamples());
+                return [d, os, dry](float x, const auto& p) mutable { d.setDriveDb(p[0]); const float wet=os.processSample(x,[&](float v){return d.processSample(v);}); const float aligned=dry.process(x); return aligned + p[1] * (wet-aligned); }; }},
         {"eq", "EQ 1 kHz", {{"gain_db", "Gain", "dB", -12, 12, 0}},
             [](double sr, const auto&) { Filter f; f.setRetainStateOnUpdate(true); return [f, sr, previous = 999.f](float x, const auto& p) mutable { if (p[0] != previous) { f.setPeaking(float(sr), std::min(1000.f, float(sr)*.45f), p[0]); previous = p[0]; } return f.processSample(x); }; }},
-        {"amp_sim", "Amp Simulation", {{"gain_db", "Preamp", "dB", 0, 30, 12}, {"drive", "Drive", "", .1f, 4, 1.5f}, {"output_db", "Output", "dB", -36, 6, -6}},
-            [](double sr, const auto&) { AmpSim a; a.prepare(float(sr)); return [a](float x, const auto& p) mutable { return a.processSample(x, p[0], p[1], .05f, -3, 1.2f, p[2]); }; }},
+        {"amp_sim", "Amp Simulation", {{"gain_db", "Preamp", "dB", 0, 30, 12}, {"drive", "Drive", "", .1f, 4, 1.5f}, {"output_db", "Output", "dB", -36, 6, -6}, {"oversampling", "Oversampling", "0=1x 1=2x 2=4x", 0, 2, 0, false, true}},
+            [](double sr, const auto& initial) { AmpSim a; a.prepare(float(sr),0,0,0,0,70,9000,1 << int(initial[3])); return [a](float x, const auto& p) mutable { return a.processSample(x, p[0], p[1], .05f, -3, 1.2f, p[2]); }; }},
         {"cabinet", "Cabinet (synthetic IR)", {{"output_db", "Output", "dB", -24, 6, 0}},
             [](double sr, const auto&) { Filter hp, lp; hp.setHighPass(float(sr), 80); lp.setLowPass(float(sr), float(std::min(5000.0, sr * .45))); std::vector<float> ir(1024); for (std::size_t i = 0; i < ir.size(); ++i) ir[i] = lp.processSample(hp.processSample(i == 0 ? 1.f : 0.f)); Cabinet c; c.prepare(ir); return [c = std::move(c)](float x, const auto& p) mutable { return c.processSample(x) * std::pow(10.f, p[0] / 20); }; }},
         {"delay", "Delay", {{"delay_ms", "Time", "ms", 1, 2000, 400}, {"feedback", "Feedback", "", 0, .95f, .35f}, {"mix", "Mix", "", 0, 1, .2f}},

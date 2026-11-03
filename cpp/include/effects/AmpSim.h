@@ -1,5 +1,6 @@
 #pragma once
 #include "effects/Filters.h"
+#include "effects/Oversampler.h"
 #include <cmath>
 #include <algorithm>
 
@@ -9,8 +10,9 @@ class AmpSim
 {
 public:
     void prepare(float rate, float bass = 0, float mid = 0, float treble = 0,
-                 float presence = 0, float lowCut = 70, float highCut = 9000)
+                 float presence = 0, float lowCut = 70, float highCut = 9000, int factor = 1)
     {
+        preamp_.prepare(factor); power_.prepare(factor);
         low_.prepare(rate, std::min(lowCut, rate * .45f));
         bass_.setLowShelf(rate, std::min(180.f, rate * .45f), bass);
         mid_.setPeaking(rate, std::min(800.f, rate * .45f), mid, .8f);
@@ -18,15 +20,18 @@ public:
         presence_.setHighShelf(rate, std::min(4000.f, rate * .45f), presence);
         high_.setLowPass(rate, std::min(highCut, rate * .45f));
     }
-    void reset() { low_.reset(); bass_.reset(); mid_.reset(); treble_.reset(); presence_.reset(); high_.reset(); }
+    int latencySamples() const noexcept { return preamp_.latencySamples()+power_.latencySamples(); }
+    void reset() { preamp_.reset(); power_.reset(); low_.reset(); bass_.reset(); mid_.reset(); treble_.reset(); presence_.reset(); high_.reset(); }
     float processSample(float x, float gainDb = 12, float drive = 1.5f, float bias = .05f,
                         float masterDb = -3, float powerDrive = 1.2f, float outputDb = -6)
     {
         x = low_.processSample(x) * std::pow(10.f, gainDb / 20);
-        x = saturate(x, drive, bias);
-        x = saturate(x * 1.3f, drive * .8f, -bias * .5f);
+        x = preamp_.processSample(x, [=](float v) {
+            v = saturate(v, drive, bias);
+            return saturate(v * 1.3f, drive * .8f, -bias * .5f);
+        });
         x = treble_.processSample(mid_.processSample(bass_.processSample(x)));
-        x = std::tanh(x * std::pow(10.f, masterDb / 20) * powerDrive);
+        x = power_.processSample(x, [=](float v) { return std::tanh(v * std::pow(10.f, masterDb / 20) * powerDrive); });
         x = presence_.processSample(x) * std::pow(10.f, outputDb / 20);
         return high_.processSample(x);
     }
@@ -51,6 +56,7 @@ private:
             x2=x1; x1=x; y2=y1; y1=y; return float(y);
         }
     } low_;
+    Oversampler preamp_, power_;
     Filter bass_, mid_, treble_, presence_, high_;
 };
 }

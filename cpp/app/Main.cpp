@@ -107,11 +107,11 @@ private:
                 label->setText(juce::String(p->info.name + " (" + p->info.unit + ")"), juce::dontSendNotification);
                 addAndMakeVisible(*label); labels.push_back(std::move(label));
                 auto slider = std::make_unique<juce::Slider>();
-                slider->setRange(p->info.minimum, p->info.maximum);
+                slider->setRange(p->info.minimum, p->info.maximum, p->info.requiresPrepare ? 1 : 0);
                 slider->setNumDecimalPlacesToDisplay(2);
                 slider->setValue(p->target.load(), juce::dontSendNotification);
                 slider->setTextBoxStyle(juce::Slider::TextBoxRight, false, 100, 25);
-                slider->onValueChange = [parameter = p.get(), control = slider.get()] { parameter->set(float(control->getValue())); };
+                slider->onValueChange = [this, parameter = p.get(), control = slider.get()] { const float value=float(control->getValue()); if(parameter->info.requiresPrepare) edit([&]{parameter->set(value);}); else parameter->set(value); };
                 addAndMakeVisible(*slider); sliders.push_back(std::move(slider));
             }
         }
@@ -204,7 +204,7 @@ private:
         levels.setText("Input " + levelText(in.peak) + (inputClipTicks ? " [CLIP]" : "")
                        + "    Output " + levelText(out.peak) + (outputClipTicks ? " [CLIP]" : "")
                        + (in.invalid || out.invalid ? " [INVALID SAMPLE]" : ""), juce::dontSendNotification);
-        title.setText("Multi Effects v0.2 | Selected mono -> outputs | blocks " + juce::String(callbackCount.load())
+        title.setText("Multi Effects v0.3 | Selected mono -> outputs | blocks " + juce::String(callbackCount.load())
                       + " | CPU " + juce::String(manager.getCpuUsage() * 100, 1) + "%", juce::dontSendNotification);
     }
     Chain chain;
@@ -234,7 +234,7 @@ class Application final : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return "Multi Effects Prototype"; }
-    const juce::String getApplicationVersion() override { return "0.2.0"; }
+    const juce::String getApplicationVersion() override { return "0.3.0"; }
     void initialise(const juce::String&) override
     {
         window = std::make_unique<AppWindow>(getApplicationName());

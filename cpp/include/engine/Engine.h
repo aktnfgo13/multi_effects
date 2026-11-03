@@ -12,6 +12,7 @@ struct ParameterInfo
     std::string id, name, unit;
     float minimum, maximum, initial;
     bool smooth = true;
+    bool requiresPrepare = false;
 };
 struct Parameter
 {
@@ -25,6 +26,7 @@ class Effect
 {
 public:
     virtual ~Effect() = default;
+    virtual std::size_t latencySamples() const noexcept { return 0; }
     virtual void prepare(ProcessSpec) = 0;
     virtual void reset() = 0;
     virtual void process(float*, std::size_t) noexcept = 0;
