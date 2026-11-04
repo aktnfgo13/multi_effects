@@ -6,10 +6,11 @@ namespace multi_effects::app
 struct Preferences
 {
     int input=0;
+    bool stereo=false;
     juce::String deviceXml,lastPreset,presetFolder;
     static Preferences read(const juce::PropertySet& properties)
     {
-        Preferences p;
+        Preferences p;p.stereo=properties.getBoolValue("stereoInput",false);
         p.input=juce::jlimit(-1,255,properties.getIntValue("input",0));
         if (properties.getIntValue("input",0)<-1 || properties.getIntValue("input",0)>255) p.input=0;
         p.deviceXml=properties.getValue("deviceXml");
@@ -18,7 +19,7 @@ struct Preferences
     }
     void write(juce::PropertySet& properties) const
     {
-        properties.setValue("settingsVersion",1);properties.setValue("input",input);
+        properties.setValue("stereoInput",stereo);properties.setValue("settingsVersion",1);properties.setValue("input",input);
         properties.setValue("deviceXml",deviceXml);properties.setValue("lastPreset",lastPreset);properties.setValue("presetFolder",presetFolder);
     }
 };

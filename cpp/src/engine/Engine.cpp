@@ -32,7 +32,7 @@ public:
     std::size_t latencySamples() const noexcept override { return latency_; }
     void prepare(ProcessSpec spec) override
     {
-        if (!std::isfinite(spec.sampleRate) || spec.sampleRate < 8000 || spec.sampleRate > 192000 || !spec.maxBlockSize)
+        if (!std::isfinite(spec.sampleRate) || spec.sampleRate < 8000 || spec.sampleRate > 192000 || !spec.maxBlockSize || (spec.channels != 1 && spec.channels != 2))
             throw std::invalid_argument("Unsupported process spec");
         spec_ = spec;
         reset();
@@ -73,11 +73,35 @@ public:
             Cabinet cabinet; cabinet.prepare(ir);
             processor_ = [cabinet = std::move(cabinet)](float x, const auto& p) mutable { return cabinet.processSample(x) * std::pow(10.f, p[0]/20); };
         }
+        // std::function capture copies own their vectors/filter histories. Copy only
+        // during reset/prepare, before either lane has processed any audio.
+        rightProcessor_ = spec_.channels == 2 ? processor_ : SampleProcessor{};
+        if (spec_.channels == 2 && type == "delay") {
+            Delay d; d.prepare(spec_.sampleRate);
+            rightProcessor_ = [d = std::move(d)](float x, const auto& p) mutable {
+                return d.processSample(x, std::min(2000.f, p[0] * 1.03f), p[1], p[2]);
+            };
+        }
+        if (spec_.channels == 2 && type == "reverb") {
+            Reverb r; r.prepare(spec_.sampleRate, 1000.0 * 23 / 44100);
+            rightProcessor_ = [r = std::move(r)](float x, const auto& p) mutable {
+                return r.processSample(x, p[0], p[1], p[2]);
+            };
+        }
+        rightDryDelay_.fill(0);
         coefficient_ = float(std::exp(-1.0 / (spec_.sampleRate * .02)));
         wet_ = bypass.load() ? 0.f : 1.f;
         dryDelay_.fill(0); dryIndex_ = 0;
     }
-    void process(float* data, std::size_t count) noexcept override
+    StereoPolicy stereoPolicy() const noexcept override {
+        return type == "delay" || type == "reverb" ? StereoPolicy::Decorrelated : StereoPolicy::DualMono;
+    }
+    void process(float* data, std::size_t count) noexcept override { render(data, nullptr, count); }
+    void processStereo(float* left, float* right, std::size_t count) noexcept override {
+        if (!left || !right || left == right || !rightProcessor_) return;
+        render(left, right, count);
+    }
+    void render(float* data, float* right, std::size_t count) noexcept
     {
         if (!processor_) return;
         for (std::size_t n = 0; n < count; ++n)
@@ -89,16 +113,27 @@ public:
             }
             const float targetWet = bypass.load(std::memory_order_relaxed) ? 0.f : 1.f;
             wet_ = targetWet + coefficient_ * (wet_ - targetWet);
+            // Reject invalid input before it can poison filter/feedback histories.
+            if (!std::isfinite(data[n])) { ++invalidSampleCount; data[n] = 0; }
+            if (right && !std::isfinite(right[n])) { ++invalidSampleCount; right[n] = 0; }
             const float dry = data[n];
             const float processed = processor_(dry, values_);
             float alignedDry = dry;
             if (latency_)
             {
                 alignedDry = dryDelay_[dryIndex_]; dryDelay_[dryIndex_] = dry;
-                dryIndex_ = (dryIndex_ + 1) % latency_;
             }
             data[n] = alignedDry + wet_ * (processed - alignedDry);
             if (!std::isfinite(data[n])) { ++invalidSampleCount; data[n] = 0; }
+            if (right) {
+                const float input = right[n];
+                const float wet = rightProcessor_(input, values_);
+                float aligned = input;
+                if (latency_) { aligned = rightDryDelay_[dryIndex_]; rightDryDelay_[dryIndex_] = input; }
+                right[n] = aligned + wet_ * (wet - aligned);
+                if (!std::isfinite(right[n])) { ++invalidSampleCount; right[n] = 0; }
+            }
+            if (latency_) dryIndex_ = (dryIndex_ + 1) % latency_;
         }
     }
 private:
@@ -106,10 +141,10 @@ private:
     const bool cabinetLatency_;
     std::size_t latency_ = 0;
     ProcessSpec spec_;
-    SampleProcessor processor_;
+    SampleProcessor processor_, rightProcessor_;
     std::vector<float> values_;
     float coefficient_ = 0, wet_ = 1;
-    std::array<float, Cabinet::partition> dryDelay_{};
+    std::array<float, Cabinet::partition> dryDelay_{}, rightDryDelay_{};
     std::size_t dryIndex_ = 0;
 };
 const std::vector<EffectDefinition>& registry()
@@ -147,6 +182,7 @@ std::unique_ptr<Effect> createEffect(const std::string& type, const std::string&
 void Chain::prepare(ProcessSpec spec) { for (auto& e : effects) e->prepare(spec); }
 void Chain::reset() { for (auto& e : effects) e->reset(); }
 void Chain::process(float* samples, std::size_t count) noexcept { for (auto& e : effects) e->process(samples, count); }
+void Chain::processStereo(float* left, float* right, std::size_t frames) noexcept { for (auto& e : effects) e->processStereo(left, right, frames); }
 void Chain::move(std::size_t from, std::size_t to)
 {
     if (from >= effects.size() || to >= effects.size()) throw std::out_of_range("Effect index");

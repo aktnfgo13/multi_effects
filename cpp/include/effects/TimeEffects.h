@@ -58,12 +58,12 @@ class Reverb
         void write(float x) { data[index] = x; index = (index + 1) % data.size(); }
     };
 public:
-    void prepare(double rate)
+    void prepare(double rate, double spreadMs = 0)
     {
         if (!std::isfinite(rate) || rate < 8000 || rate > 192000) throw std::invalid_argument("sample rate");
         constexpr double times[] = {29.7, 37.1, 41.1, 43.7, 5.0, 1.7};
         for (std::size_t i = 0; i < lines_.size(); ++i)
-            lines_[i].data.assign(std::max<std::size_t>(1, static_cast<std::size_t>(rate * times[i] / 1000)), 0);
+            lines_[i].data.assign(std::max<std::size_t>(1, static_cast<std::size_t>(rate * (times[i] + spreadMs) / 1000)), 0);
         reset();
     }
     void reset() { for (auto& line : lines_) line.reset(); }

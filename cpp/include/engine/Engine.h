@@ -21,7 +21,8 @@ struct Parameter
     explicit Parameter(ParameterInfo p) : info(std::move(p)), target(info.initial) {}
     void set(float value);
 };
-struct ProcessSpec { double sampleRate = 44100; std::size_t maxBlockSize = 512; };
+struct ProcessSpec { double sampleRate = 44100; std::size_t maxBlockSize = 512; unsigned channels = 1; };
+enum class StereoPolicy { DualMono, Decorrelated };
 class Effect
 {
 public:
@@ -30,6 +31,9 @@ public:
     virtual void prepare(ProcessSpec) = 0;
     virtual void reset() = 0;
     virtual void process(float*, std::size_t) noexcept = 0;
+    // Distinct, writable planar buffers. prepare({rate, block, 2}) before use.
+    virtual void processStereo(float* left, float* right, std::size_t frames) noexcept = 0;
+    virtual StereoPolicy stereoPolicy() const noexcept { return StereoPolicy::DualMono; }
     std::string id, type, name;
     std::vector<std::unique_ptr<Parameter>> parameters;
     std::atomic<bool> bypass{false};
@@ -58,6 +62,7 @@ public:
     void prepare(ProcessSpec spec);
     void reset();
     void process(float* samples, std::size_t count) noexcept;
+    void processStereo(float* left, float* right, std::size_t frames) noexcept;
     void move(std::size_t from, std::size_t to);
 };
 Chain cloneConfiguration(const Chain&); // Non-realtime snapshot; no DSP state copy.

@@ -6,8 +6,7 @@
 
 namespace multi_effects
 {
-// Non-owning planar device boundary; the current policy selects one physical input
-// and replicates mono DSP to outputs. A future stereo processor can retain this view.
+// Non-owning planar device boundary. Mono selection or adjacent physical L/R pair.
 struct AudioBlock
 {
     const float* const* inputs;
@@ -36,11 +35,12 @@ private:
     std::atomic<float> peak_{0};
     std::atomic<bool> clipped_{false}, invalid_{false};
 };
-class MonoAudioIO
+class AudioIO
 {
 public:
     std::atomic<int> selectedInput{0}; // Physical device index, not packed callback index.
     std::atomic<bool> muted{true};
+    std::atomic<bool> stereoInput{false}; // Selected physical input and its next channel.
     LevelMeter inputLevel, outputLevel;
     // Lifecycle and channel-map mutation require a stopped callback.
     void prepare(Chain& chain, ProcessSpec spec, std::vector<int> activeInputs)
@@ -49,6 +49,9 @@ public:
         if (!spec.maxBlockSize || !std::isfinite(spec.sampleRate) || spec.sampleRate < 8000 || spec.sampleRate > 192000)
             throw std::invalid_argument("Unsupported audio IO spec");
         scratch_.assign(spec.maxBlockSize, 0);
+        stereo_ = spec.channels == 2;
+        rightScratch_.assign(stereo_ ? spec.maxBlockSize : 0, 0);
+        routeStereo_ = stereoInput.load();
         activeInputs_ = std::move(activeInputs);
         const int selected = selectedInput.load();
         if (std::find(activeInputs_.begin(), activeInputs_.end(), selected) == activeInputs_.end())
@@ -69,6 +72,7 @@ public:
             return;
         }
         const int selected = selectedInput.load(std::memory_order_relaxed);
+        const bool paired = stereo_ && stereoInput.load(std::memory_order_relaxed);
         int packed = -1;
         for (std::size_t c = 0; c < activeInputs_.size(); ++c)
             if (activeInputs_[c] == selected) { packed = int(c); break; }
@@ -79,6 +83,8 @@ public:
             return nullptr;
         };
         const float* currentSource = channel(routeInput_);
+        const float* currentRight = routeStereo_ ? channel(routeInput_ + 1) : currentSource;
+        const float* selectedRight = paired ? channel(selected + 1) : source;
         float inPeak = 0, outPeak = 0;
         bool inClip = false, outClip = false, inInvalid = false, outInvalid = false;
         for (std::size_t start = 0; start < block.frames;)
@@ -89,17 +95,28 @@ public:
                 float x = source ? source[start + i] : 0;
                 if (!std::isfinite(x)) { inInvalid = true; x = 0; }
                 inPeak = std::max(inPeak, std::abs(x)); inClip |= std::abs(x) >= 1.f;
-                if (routeInput_ != selected)
+                if (stereo_) {
+                    float r = selectedRight ? selectedRight[start+i] : 0;
+                    if (!std::isfinite(r)) { inInvalid = true; r = 0; }
+                    inPeak = std::max(inPeak, std::abs(r)); inClip |= std::abs(r) >= 1.f;
+                }
+                if (routeInput_ != selected || routeStereo_ != paired)
                 {
                     routeGain_ = std::max(0.f, routeGain_ - routeStep_);
-                    if (routeGain_ == 0) { routeInput_ = selected; currentSource = source; }
+                    if (routeGain_ == 0) { routeInput_ = selected; routeStereo_ = paired; currentSource = source; currentRight = selectedRight; }
                 }
                 else routeGain_ = std::min(1.f, routeGain_ + routeStep_);
                 float routed = currentSource ? currentSource[start+i] : 0;
                 if (!std::isfinite(routed)) { routed = 0; inInvalid = true; }
                 scratch_[i] = routed * routeGain_;
+                if (stereo_) {
+                    float r = currentRight ? currentRight[start+i] : 0;
+                    if (!std::isfinite(r)) { r = 0; inInvalid = true; }
+                    rightScratch_[i] = r * routeGain_;
+                }
             }
-            chain.process(scratch_.data(), n);
+            if (stereo_) chain.processStereo(scratch_.data(), rightScratch_.data(), n);
+            else chain.process(scratch_.data(), n);
             for (std::size_t i = 0; i < n; ++i)
             {
                 const float target = muted.load(std::memory_order_relaxed) ? 0.f : .5f;
@@ -109,8 +126,16 @@ public:
                 outClip |= std::abs(preClamp) >= 1.f;
                 const float y = std::clamp(preClamp, -1.f, 1.f);
                 outPeak = std::max(outPeak, std::abs(y));
+                float right = y;
+                if (stereo_) {
+                    float r = rightScratch_[i] * outputGain_;
+                    if (!std::isfinite(r)) { r = 0; outInvalid = true; }
+                    outClip |= std::abs(r) >= 1.f;
+                    right = std::clamp(r, -1.f, 1.f);
+                    outPeak = std::max(outPeak, std::abs(right));
+                }
                 for (int c = 0; block.outputs && c < block.outputCount; ++c)
-                    if (block.outputs[c]) block.outputs[c][start + i] = y;
+                    if (block.outputs[c]) block.outputs[c][start + i] = block.outputCount == 1 ? .5f * (y + right) : (c % 2 ? right : y);
             }
             start += n;
         }
@@ -118,13 +143,15 @@ public:
         outputLevel.publish(outPeak, outClip, outInvalid);
     }
 private:
-    std::vector<float> scratch_;
+    std::vector<float> scratch_, rightScratch_;
+    bool stereo_ = false, routeStereo_ = false;
     std::vector<int> activeInputs_;
     int routeInput_ = -1;
     float routeGain_ = 1, routeStep_ = 1;
     float outputGain_ = 0;
     bool ready_ = false;
 };
+using MonoAudioIO = AudioIO; // Source compatibility; ProcessSpec controls lane count.
 static_assert(std::atomic<int>::is_always_lock_free && std::atomic<float>::is_always_lock_free
               && std::atomic<bool>::is_always_lock_free, "Audio IO requires lock-free atomics");
 }

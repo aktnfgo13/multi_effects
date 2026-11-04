@@ -16,7 +16,7 @@ public:
         options.millisecondsBeforeSaving=1000;
         settings.setStorageParameters(options);
         preferences=multi_effects::app::Preferences::read(*settings.getUserSettings());
-        runtime.preferredInput=preferences.input;
+        runtime.preferredInput=preferences.input;runtime.io.stereoInput=preferences.stereo;
         lastGoodXml=preferences.deviceXml;
         presetFolder=juce::File(preferences.presetFolder);
         if(!presetFolder.isDirectory()) presetFolder=settings.getUserSettings()->getFile().getParentDirectory().getChildFile("Presets");
@@ -31,9 +31,15 @@ public:
         for(auto* b:{&up,&down,&remove,&add,&save,&saveAs,&load,&loadSelected,&irLoad,&reconnect})addAndMakeVisible(*b);
         for(auto* label:{&title,&status,&levels,&audioStatus,&latencyStatus,&presetTitle,&irStatus,&deviceWarning})addAndMakeVisible(*label);
         for(auto* combo:{&types,&inputSelector,&presetList})addAndMakeVisible(*combo);
-        addAndMakeVisible(mute);addAndMakeVisible(bypass);
+        addAndMakeVisible(stereoInput);addAndMakeVisible(mute);addAndMakeVisible(bypass);
         int n=1;for(const auto& d:registry())types.addItem(juce::String(d.name),n++);types.setSelectedId(1);
         mute.setToggleState(true,juce::dontSendNotification);
+        stereoInput.setTooltip("Use selected physical input as L and the next input as R; missing R is silent.");
+        stereoInput.setToggleState(preferences.stereo,juce::dontSendNotification);
+        stereoInput.onClick=[this]{
+            runtime.io.stereoInput=stereoInput.getToggleState();
+            inputSelector.onChange();persist();
+        };
         mute.onClick=[this]{runtime.io.muted=mute.getToggleState();};
         bypass.onClick=[this]{std::lock_guard<std::mutex> lock(runtime.control);if(auto* e=selectedUnsafe()){e->bypass=bypass.getToggleState();session.dirty=true;list.repaint();}};
         up.onClick=[this]{move(-1);};down.onClick=[this]{move(1);};
@@ -54,8 +60,9 @@ public:
         inputSelector.onChange=[this]{
             const int channel=inputSelector.getSelectedId()-1;auto* device=manager.getCurrentAudioDevice();
             if(!device||channel<0||channel>=device->getInputChannelNames().size())return;
-            if(!device->getActiveInputChannels()[channel]){
-                auto setup=manager.getAudioDeviceSetup();setup.useDefaultInputChannels=false;setup.inputChannels.setBit(channel);
+            const int right=runtime.io.stereoInput?channel+1:channel;
+            if(!device->getActiveInputChannels()[channel] || (right<device->getInputChannelNames().size()&&!device->getActiveInputChannels()[right])){
+                auto setup=manager.getAudioDeviceSetup();setup.useDefaultInputChannels=false;setup.inputChannels.setBit(channel);if(right<device->getInputChannelNames().size())setup.inputChannels.setBit(right);
                 const auto error=manager.setAudioDeviceSetup(setup,true);if(error.isNotEmpty()){notice("Error: Input configuration: "+error,2);return;}
             }
             runtime.preferredInput=channel;runtime.io.selectedInput=channel;persist();
@@ -97,7 +104,7 @@ public:
         for(std::size_t i=0;i<sliders.size();++i){labels[i]->setBounds(305,112+int(i)*60,w-320,22);sliders[i]->setBounds(305,134+int(i)*60,w-320,30);}
         irStatus.setBounds(305,352,w-320,28);
         deviceWarning.setBounds(15,382,w-30,24);devices.setBounds(15,410,w-30,h-545);
-        inputSelector.setBounds(15,h-125,265,28);audioStatus.setBounds(295,h-125,w-310,28);
+        inputSelector.setBounds(15,h-125,265,28);stereoInput.setBounds(290,h-125,170,28);audioStatus.setBounds(465,h-125,w-480,28);
         latencyStatus.setBounds(15,h-94,w-30,25);levels.setBounds(15,h-66,w-30,25);status.setBounds(15,h-36,w-30,30);
     }
 private:
@@ -217,7 +224,7 @@ private:
     }
     void persist()
     {
-        preferences.input=runtime.preferredInput.load();preferences.lastPreset=session.file==juce::File()?juce::String():session.file.getFullPathName();preferences.presetFolder=presetFolder.getFullPathName();preferences.deviceXml=lastGoodXml;preferences.write(*settings.getUserSettings());
+        preferences.stereo=runtime.io.stereoInput.load();preferences.input=runtime.preferredInput.load();preferences.lastPreset=session.file==juce::File()?juce::String():session.file.getFullPathName();preferences.presetFolder=presetFolder.getFullPathName();preferences.deviceXml=lastGoodXml;preferences.write(*settings.getUserSettings());
     }
     void markAudioInitialising(bool active)
     {
@@ -235,7 +242,7 @@ private:
     {
         std::vector<int> active;const auto mask=device->getActiveInputChannels();
         for(int c=0;c<device->getInputChannelNames().size();++c)if(mask[c])active.push_back(c);
-        if(!runtime.prepare({device->getCurrentSampleRate(),std::size_t(std::max(1,device->getCurrentBufferSizeSamples()))},std::move(active)))rollbackRequested=true;
+        if(!runtime.prepare({device->getCurrentSampleRate(),std::size_t(std::max(1,device->getCurrentBufferSizeSamples())),2},std::move(active)))rollbackRequested=true;
     }
     void audioDeviceStopped() override {runtime.stop();}
     void audioDeviceError(const juce::String& message) override
@@ -273,7 +280,7 @@ private:
         const auto in=runtime.io.inputLevel.consume(),out=runtime.io.outputLevel.consume();inputClipTicks=in.clipped?20:std::max(0,inputClipTicks-1);outputClipTicks=out.clipped?20:std::max(0,outputClipTicks-1);
         const auto level=[](float p){return p>0?juce::String(20*std::log10(p),1)+" dBFS":juce::String("-inf dBFS");};
         levels.setText("Input "+level(in.peak)+(inputClipTicks?" [CLIP]":"")+"    Output "+level(out.peak)+(outputClipTicks?" [CLIP]":"")+(in.invalid||out.invalid?" [INVALID SAMPLE]":""),juce::dontSendNotification);
-        title.setText("Multi Effects Alpha v0.4 | CPU "+juce::String(manager.getCpuUsage()*100,1)+"% | blocks "+juce::String(blocks),juce::dontSendNotification);
+        title.setText("Multi Effects Alpha v0.5 | CPU "+juce::String(manager.getCpuUsage()*100,1)+"% | blocks "+juce::String(blocks),juce::dontSendNotification);
         presetTitle.setText("Preset: "+session.title(),juce::dontSendNotification);
         if(++settingsTicks>=10){settingsTicks=0;if(active){settings.getUserSettings()->setValue("audioInitialising",false);if(auto xml=manager.createStateXml())lastGoodXml=xml->toString();rollbackAttempted=false;lastError.clear();}persist();}
     }
@@ -283,6 +290,7 @@ private:
     juce::ApplicationProperties settings;multi_effects::app::Preferences preferences;multi_effects::app::PresetSession session;
     juce::File presetFolder;std::vector<juce::File> presetFiles;
     juce::TextButton up{"Up"},down{"Down"},remove{"Remove..."},add{"Add"},save{"Save"},saveAs{"Save As..."},load{"Open preset..."},loadSelected{"Load selected"},irLoad{"Load cabinet IR..."},reconnect{"Reconnect audio"};
+    juce::ToggleButton stereoInput{"Stereo input pair"};
     juce::ToggleButton mute{"Mute DSP"},bypass{"Bypass selected effect"};
     juce::ComboBox types,inputSelector,presetList;juce::StringArray inputNames;
     juce::Label title,status,levels,audioStatus,latencyStatus,presetTitle,irStatus,deviceWarning;
@@ -304,7 +312,7 @@ class Application final:public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override{return "Multi Effects Prototype";}
-    const juce::String getApplicationVersion() override{return "0.4.0";}
+    const juce::String getApplicationVersion() override{return "0.5.0";}
     void initialise(const juce::String&) override
     {
         window=std::make_unique<AppWindow>(getApplicationName());window->setUsingNativeTitleBar(true);

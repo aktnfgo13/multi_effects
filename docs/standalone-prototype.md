@@ -1,6 +1,6 @@
 # Standalone prototype
 
-Current development: **v0.4 Alpha candidate**. v0.3 external guitar/interface testing
+Current development: **v0.5 Stereo Alpha candidate**. v0.3 external guitar/interface testing
 was reported successful by the user. v0.4 hardware input/reconnect acceptance remains
 pending; see the CoreAudio limitation and validation record at the end.
 
@@ -28,12 +28,14 @@ Starts muted. Select an audio device and the guitar input using the device panel
 use headphones to avoid acoustic feedback, then clear Mute. The dedicated Input selector
 lists the device's physical channels (Input 1, Input 2, ...); selecting a disabled
 channel enables it through a device restart. Switching already-enabled inputs needs
-no restart. Selected mono input is processed and duplicated to available outputs.
+no restart. By default the selected mono input feeds both DSP lanes; spatial effects
+can generate different L/R tails. Stereo input pair uses the selected physical input
+as L and the next as R (missing R is silent). A single output receives (L+R)/2.
 The practical v0.2 target is **48 kHz / 128 samples**: set both in the device panel;
 the status row reports the actual device settings rather than assuming the target.
 A missing selected channel falls back to the first active input during prepare, or
 none if there are no active inputs. An invalid runtime selection supplies zero input
-while existing DSP tails continue. Input choice is session-local, not part of a preset.
+while existing DSP tails continue. Input choice and stereo input mode are app preferences, not part of a preset.
 JUCE's device-panel Test tone bypasses the app Mute/output clamp/meters: keep hardware
 volume low when using Test; it is not a test of the DSP chain. Output gain is -6 dB and
 final output clamps to +/-1. Add/remove/reorder effects using the left panel.
@@ -60,11 +62,10 @@ non-finite final output is also replaced with zero and reports INVALID SAMPLE.
 Parameter, registry and Chain. The app owns device/GUI/file dialogs and JSON IO.
 No external cabinet assets or models are bundled.
 
-`engine/AudioIO.h` provides a non-owning planar AudioBlock boundary and MonoAudioIO
-policy. It maps physical input IDs to JUCE/CoreAudio's packed active input buffers.
-The JUCE adapter supplies that map during stopped prepare. Future stereo processing
-can use the same planar boundary with separate channel state; current Effects remain
-mono. Channel maps/scratch allocations are prepare-only. Selection, mute and level
+`engine/AudioIO.h` provides a non-owning planar AudioBlock boundary and AudioIO
+policy (`MonoAudioIO` remains a source-compatible alias). It maps physical input IDs
+to JUCE/CoreAudio's packed active input buffers. The adapter prepares two DSP lanes;
+legacy Core callers still default to one. Channel maps/scratch allocations are prepare-only. Selection, mute and level
 publication use lock-free atomics; string formatting and widgets remain on the UI
 thread. Prepare failure silences output and retains a readable cause; v0.4 attempts
 the last working device configuration, or use Reconnect audio. Restart clears the
@@ -396,3 +397,100 @@ P2: seamless graph changes/tails, preset folder management, small-display layout
 live RSS/dropout telemetry and subjective transition listening remain future work.
 Final guitar checks: Input 1/2, meters/CLIP, Mute, Delay sweep with feedback, 1x/2x/4x,
 custom IR Save/relaunch, 48k/128, unplug/reconnect and a sustained playing session.
+
+## v0.5 stereo contract and policies
+
+`ProcessSpec { sampleRate, maxBlockSize, channels }` accepts one or two DSP lanes;
+omitted channels defaults to one for existing Core callers. The original mono
+`process(float*, frames)` remains the reference path. After preparing two lanes,
+`Effect::processStereo(left, right, frames)` and `Chain::processStereo` accept distinct,
+non-null, writable float planes of at least `frames` samples. Do not alternate mono
+and stereo calls within a prepared stream: reset/reprepare when changing contracts.
+Invalid stereo pointers or an unprepared second lane are rejected without processing.
+No JUCE types or OS APIs enter the Core. Block size may vary or exceed prepare's hint.
+
+Each effect owns two independent processor captures and two latency-aligned bypass
+histories. Copies are made only from reset state during prepare/reset, including deep
+copies of convolution/feedback buffers. Parameters and bypass are shared targets;
+smoothing advances **once per frame**, then both lanes consume the same values.
+Non-finite inputs are replaced before entering stateful processors. Reset/prepare
+still require stopped processing and may allocate. There is no process allocation.
+
+| Effects | Stereo policy |
+|---|---|
+| Gate, Compressor, Gain, Distortion, EQ, Amp | Dual mono; independent dynamics/filter/nonlinear histories, same controls |
+| Cabinet | Same mono IR applied independently to L/R; independent convolution histories |
+| Tremolo | Independent lane state with synchronized LFO phase; retains center modulation |
+| Delay | Independent feedback lines; L retains legacy time, R uses min(2000 ms, 1.03 × time) |
+| Reverb | Independent networks; L retains legacy times, R adds 23/44100 seconds to each line |
+
+Delay/Reverb have `StereoPolicy::Decorrelated`; other effects use `DualMono`. The
+small fixed wet-path time offsets create differing tails from mono guitar without
+crossfeeding channels or moving the dry center. Delay retains its 10 ms tap crossfade
+on both lanes and .95 feedback cap. Reverb feedback/damping/mix and dry/wet gains are
+unchanged. This is a conservative decorrelation policy, not a new room model or a
+claim of improved sound. At the Delay 2000 ms cap both times coincide; very short
+times can quantize to the same integer tap. Spatial effects deliberately are not
+invariant to swapping L/R because their line timings differ. Dual-mono effects are.
+
+For finite input, the left lane of every effect matches its existing mono reference
+exactly; dual-mono effects produce identical L/R from mono. Only spatial tails differ.
+Stereo IR files/dual IR selection are deferred. The planar interface already allows
+different kernels per lane later; current presets still store one mono IR. Existing
+schema v2/v3, effect IDs, parameter IDs and oversampling defaults are unchanged.
+Stereo input preference is separate from DSP presets and defaults off when absent.
+
+The Standalone always prepares two lanes. Mono input duplicates **before** DSP;
+Stereo input pair selects adjacent physical inputs, enabling channels through the
+existing stopped-device setup when needed. Switching modes uses the same 5 ms route
+fade as input switching. Missing R is silence. Output slots alternate L/R; a one-slot
+device receives (L+R)/2. Aggregate meters show the maximum of both lanes and either
+lane can trigger CLIP. Check mono fold-down when listening to the spatial effects.
+
+Oversamplers are owned per lane, including their dry-alignment delays. Cabinet keeps
+128-sample partitions; stereo doubles kernel/history storage and convolution work
+but does not double latency. Full default chain latency at 48 kHz remains 128 samples
+(2.67 ms) at 1x or 320 samples (6.67 ms) with Amp and Distortion both at 2x/4x. Wet
+Delay/Reverb timing is an effect characteristic, not extra dry signal-path latency.
+
+### v0.5 measurement and verification
+
+Run `cpp/build/test_stereo profile` for the default nine-effect chain (without
+Tremolo). Local Release measurements, 48k/128, 100 warmup and 2000 measured blocks:
+
+| Lanes | Nonlinear factor | Mean us | Observed max us | Max / 2666.67 us deadline |
+|---|---|---:|---:|---:|
+| Mono | 1x | 18.92 | 29.54 | 1.11% |
+| Mono | 2x | 88.01 | 208.29 | 7.81% |
+| Mono | 4x | 152.07 | 194.71 | 7.30% |
+| Stereo | 1x | 30.19 | 138.25 | 5.18% |
+| Stereo | 2x | 169.50 | 244.46 | 9.17% |
+| Stereo | 4x | 302.80 | 522.17 | 19.58% |
+
+Observed maxima include scheduler noise and are not worst-case execution guarantees.
+No hardware/embedded inference is intended. CSV: ignored `cpp/build/v05-profile.csv`.
+
+`StereoCoreMatrix` covers all registered effects, three rates and oversampling modes,
+mono equivalence/center, left/right-only isolation, dual-mono swap, reset/reprepare,
+64/128/256/512 and irregular partitions, rate changes, non-finite input, known and
+32768-tap Cabinet impulses, spatial parameter changes, routing/meter/mute, stereo
+rollback and process allocation/free accounting. `StereoConcurrentControls` changes
+shared atomic targets while active 4x stereo processing runs. The settings/preset UX
+test also restores stereo input preference and compares both output planes after
+an embedded-IR preset roundtrip. Existing tests and tolerances are retained.
+
+Release v0.5 GUI opened with the user's v0.4 preset, 48k/128 and advancing callbacks.
+Stereo input pair toggling kept callbacks active; it was returned to mono-input mode.
+Output remains muted. This was output-only on built-in speakers: external stereo
+input, audible stereo imaging and physical reconnect are not claimed verified.
+The v0.4 CoreAudio microphone-opening limitation remains a P1 hardware acceptance
+item. P2: linked stereo dynamics, adjustable spatial width and shared immutable IR
+kernel storage; none is required for channel-safe processing. No new effects,
+plugins, hardware code, Windows work or oversampling algorithm changes were added.
+
+Final v0.5 regression (one complete Release run after implementation): CTest **23/23**,
+pytest **42/42**, all six existing Python/C++ comparisons passed unchanged. ASan/UBSan
+**21/21** non-long-run tests passed (`ASAN_OPTIONS=detect_leaks=0`); TSan **5/5**
+concurrent tests passed. Debug and Release app builds succeeded. The existing two
+long-run tests ran in the Release suite; sanitizer long runs were excluded. Logs
+are ignored `cpp/build/v05-*.log`. No commit or push was performed.
