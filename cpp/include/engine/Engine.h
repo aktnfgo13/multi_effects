@@ -37,6 +37,7 @@ public:
     // Prepared only while callback is stopped. Raw asset data is serialized outside DSP.
     std::vector<float> impulseResponse;
     double impulseSampleRate = 44100;
+    std::string impulseName; // Optional preset metadata; never read by processing.
     // Audio-thread diagnostic. Read only after processing is stopped.
     std::size_t invalidSampleCount = 0;
 };
@@ -59,4 +60,5 @@ public:
     void process(float* samples, std::size_t count) noexcept;
     void move(std::size_t from, std::size_t to);
 };
+Chain cloneConfiguration(const Chain&); // Non-realtime snapshot; no DSP state copy.
 }

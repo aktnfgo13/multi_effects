@@ -53,6 +53,7 @@ public:
         const int selected = selectedInput.load();
         if (std::find(activeInputs_.begin(), activeInputs_.end(), selected) == activeInputs_.end())
             selectedInput.store(activeInputs_.empty() ? -1 : activeInputs_.front());
+        routeInput_ = selectedInput.load(); routeGain_ = 1; routeStep_ = float(1.0 / std::max(1.0, spec.sampleRate * .005));
         outputGain_ = 0;
         inputLevel.consume(); outputLevel.consume();
         chain.prepare(spec);
@@ -72,6 +73,12 @@ public:
         for (std::size_t c = 0; c < activeInputs_.size(); ++c)
             if (activeInputs_[c] == selected) { packed = int(c); break; }
         const float* source = block.inputs && packed >= 0 && packed < block.inputCount ? block.inputs[packed] : nullptr;
+        const auto channel = [&](int physical) -> const float* {
+            for (std::size_t c=0;c<activeInputs_.size();++c)
+                if(activeInputs_[c]==physical && block.inputs && int(c)<block.inputCount) return block.inputs[c];
+            return nullptr;
+        };
+        const float* currentSource = channel(routeInput_);
         float inPeak = 0, outPeak = 0;
         bool inClip = false, outClip = false, inInvalid = false, outInvalid = false;
         for (std::size_t start = 0; start < block.frames;)
@@ -82,7 +89,15 @@ public:
                 float x = source ? source[start + i] : 0;
                 if (!std::isfinite(x)) { inInvalid = true; x = 0; }
                 inPeak = std::max(inPeak, std::abs(x)); inClip |= std::abs(x) >= 1.f;
-                scratch_[i] = x;
+                if (routeInput_ != selected)
+                {
+                    routeGain_ = std::max(0.f, routeGain_ - routeStep_);
+                    if (routeGain_ == 0) { routeInput_ = selected; currentSource = source; }
+                }
+                else routeGain_ = std::min(1.f, routeGain_ + routeStep_);
+                float routed = currentSource ? currentSource[start+i] : 0;
+                if (!std::isfinite(routed)) { routed = 0; inInvalid = true; }
+                scratch_[i] = routed * routeGain_;
             }
             chain.process(scratch_.data(), n);
             for (std::size_t i = 0; i < n; ++i)
@@ -105,6 +120,8 @@ public:
 private:
     std::vector<float> scratch_;
     std::vector<int> activeInputs_;
+    int routeInput_ = -1;
+    float routeGain_ = 1, routeStep_ = 1;
     float outputGain_ = 0;
     bool ready_ = false;
 };

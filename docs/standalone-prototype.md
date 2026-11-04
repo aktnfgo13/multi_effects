@@ -1,5 +1,9 @@
 # Standalone prototype
 
+Current development: **v0.4 Alpha candidate**. v0.3 external guitar/interface testing
+was reported successful by the user. v0.4 hardware input/reconnect acceptance remains
+pending; see the CoreAudio limitation and validation record at the end.
+
 ## Reproducible build
 
 Core: C++17, AppleClang/MSVC-oriented, no JUCE dependency. App: JUCE 8.0.12,
@@ -62,8 +66,9 @@ The JUCE adapter supplies that map during stopped prepare. Future stereo process
 can use the same planar boundary with separate channel state; current Effects remain
 mono. Channel maps/scratch allocations are prepare-only. Selection, mute and level
 publication use lock-free atomics; string formatting and widgets remain on the UI
-thread. prepare failure silences output and displays PREPARE FAILED; select a valid
-rate/IR/device to retry. Restart clears the output gain ramp and resets DSP tails.
+thread. Prepare failure silences output and retains a readable cause; v0.4 attempts
+the last working device configuration, or use Reconnect audio. Restart clears the
+output gain ramp and resets DSP tails.
 
 Each effect owns its state. `prepare` and `reset` occur with processing stopped;
 reset may reconstruct an algorithm and allocate. Processing accepts arbitrary block
@@ -84,9 +89,9 @@ headroom-preserving. Amp's low-cut uses double coefficients/state to prevent
 low-frequency float coefficient error from being magnified by nonlinear stages.
 All external audio buffers remain float. Existing Filter setters retain their original
 reset behavior unless the new retain-state flag is enabled (used by realtime EQ).
-Delay preserves Python's feedback-scaled first echo. Integer delay-time changes can
-still produce pitch/click artifacts; a fractional/crossfaded delay is a later quality
-improvement. Oversampling and anti-aliasing are not yet implemented.
+Delay preserves Python's feedback-scaled first echo. v0.4 adds a 10 ms dual-tap
+crossfade for time changes; fixed-time reference behavior is unchanged. Distortion
+and Amp support v0.3's 1x/2x/4x oversampling, described below.
 
 ## Gain staging and parameter audit (v0.2)
 
@@ -110,10 +115,9 @@ Existing 20 ms one-pole smoothing is retained for Gain, Drive, EQ gain, Amp,
 Delay time/feedback, Reverb mix and bypass. Parameter targets and bypass are atomic;
 DSP smoothing history is audio-owned. Independent multi-parameter edits are not a
 transactional/sample-accurate snapshot. EQ retains filter state on gain update.
-TODO (quality): integer Delay tap movement can click/change pitch even with smoothed
-milliseconds; evaluate fractional delay or dual-tap crossfade against reference tests
-in a later tone-changing task. Input switching also selects a new waveform immediately;
-a route crossfade is deferred. Structural edits intentionally interrupt/reset tails.
+v0.4 freezes two integer delay taps during each 10 ms crossfade and coalesces new
+time requests until it completes. Input switching fades out for 5 ms then in for
+5 ms. Neither adds fixed signal-path latency. Structural edits still reset tails.
 
 Known realtime limits: our processing path performs no allocation/free, file IO,
 mutex, logging, resize, strings or GUI work; the per-sample cabinet type comparison
@@ -284,7 +288,7 @@ not verify external Input 2, audible gain changes, playing feel or hardware late
 During initial v0.3 launch one CoreAudio `AudioDeviceStart` hang occurred before DSP
 prepare; restarting only the app recovered. Keep this as a device-init reliability
 issue for external-interface regression, not a proven DSP regression. JUCE framework
-locks, Test-tone Mute bypass and Delay time-transition limitations remain as documented.
+locks and Test-tone Mute bypass remain; Delay transitions are improved in v0.4 below.
 
 Final local v0.3 validation: Release CTest **18/18**, pytest **42/42**, all six existing
 Python/C++ comparison scripts passed without tolerance changes. ASan/UBSan **9/9**
@@ -295,3 +299,100 @@ callback counter advancing from 8051 to 436612 and live input meter updates. Thi
 observes liveness, not a hardware dropout counter or audible-quality result. After
 validation the original user's v0.2 preset/embedded IR was restored in the v0.3 GUI,
 returning absent mode fields to 1x. Output remains muted. No commit/push was performed.
+
+## v0.4 operation and recovery
+
+Use the same build/bundle above. Start with **48 kHz / 128 samples**, hardware volume
+low and **Mute DSP** on. Select output/input devices in the device panel, then the
+physical guitar input in the app selector. Check callback active, input meter and
+CLIP before unmuting. Test tone is JUCE's independent device test: it bypasses DSP
+Mute, app meters and final clamp, as the orange device-panel label states.
+
+Preset controls show the current name and `*` for unsaved changes. Save updates the
+current file; Save As chooses another JSON file and confirms replacement. Open loads
+an arbitrary file; the browser lists JSON presets in that file's folder. Loading or
+quitting with unsaved changes asks Discard/Cancel. No automatic preset overwrite or
+delete occurs. Cabinet selection shows synthetic/default versus custom/embedded IR,
+including the optional filename. Schema v3 is retained; `ir_name` is optional and
+old embedded IRs remain usable without their original WAV. Cabinet convolution,
+WAV preparation, Amp, Distortion, oversampling and gain compensation are unchanged.
+
+JUCE ApplicationProperties stores device XML (rate, buffer and enabled channels),
+preferred input, last saved preset path and browser folder separately from presets:
+`~/Library/Application Support/Multi Effects/MultiEffectsStandalone.settings`.
+The initial Save As folder is `Presets` alongside that settings file. Missing or
+invalid preferences fall back; missing/bad presets report an error. Every launch and
+explicit reconnect starts muted; unsaved edits are not a crash-recovery autosave.
+
+Configuration edits validate a cloned chain before stopping the callback. Rejected
+edits retain the old chain. Device prepare uses a candidate and retains configuration
+on failure, silencing until successful prepare. Errors are formatted outside process.
+A failed device prepare requests one deferred attempt to restore the last working
+device XML; **Reconnect audio** closes/reopens it explicitly. Check callback active
+after recovery: reopening requested is not proof of device liveness. Channel maps
+are rebuilt during prepare; unavailable preferred inputs fall back without invalid
+access and can restore on reconnect. Control/lifecycle operations share a mutex;
+audio processing never acquires it. GUI callbacks resolve stable IDs, not stale DSP
+pointers. Successful graph/device reconstruction resets tails and interrupts audio.
+
+Input changes use a 5 ms fade out/in. Delay time changes use a 10 ms convex blend of
+fixed integer taps, with pending requests coalesced, including the feedback signal.
+Feedback cap .95 and constant-time Python reference behavior are retained. These
+reduce measured steps, not a promise of artifact-free arbitrary modulation. At 48 kHz
+the input test's maximum step is .00167; the 100 Hz high-feedback delay test decreases
+from about 3.983 (legacy abrupt change) to .0261. No process allocations are introduced.
+
+Monitoring shows callback activity/count, CPU, rate/buffer, DSP latency and nonlinear
+modes, input/output levels and CLIP. No callback progress for about two seconds raises
+a warning and mutes DSP. Severity uses Error/Warning/Info. The resizable window has a
+minimum size to keep controls usable; window dimensions are not persisted.
+
+### v0.4 validation and remaining limits
+
+Release CTest **21/21**, pytest **42/42**, all **six** Python/C++ comparison scripts
+passed without tolerance changes. New tests: `AlphaTransitionsRollback`,
+`AlphaConcurrentControls`, `AlphaSettingsPresetUX`. They cover failed preparation,
+instance preservation, reconnect-like channel/rate/block transitions, silence,
+input/Delay continuity, split/reset, allocation tracking, concurrent controls,
+real settings-file roundtrip, Save/Save As/failure/overwrite guard and embedded IR name.
+ASan/UBSan selected regression **11/11** (leak detection disabled); TSan concurrency
+**4/4**. Existing 600-second/rate legacy and 60-second/rate 4x offline runs pass.
+These are simulated stream durations, not hours of live hardware testing.
+
+48k/128 offline profile (microseconds/block, deadline 2666.67 us):
+
+| Full default chain modes | Mean | Observed max | Max/deadline | DSP latency |
+|---|---:|---:|---:|---:|
+| Both nonlinear effects 1x | 16.94 | 47.75 | 1.79% | 128 / 2.67 ms |
+| Both 2x | 85.68 | 137.54 | 5.16% | 320 / 6.67 ms |
+| Both 4x | 152.37 | 211.13 | 7.92% | 320 / 6.67 ms |
+
+No fixed latency was added in v0.4. Device/driver/converter latency is extra. Timing
+is local observed performance, not a hard realtime bound or embedded projection.
+Logs and CSV are ignored `cpp/build/v04-*.log` and `cpp/build/v04-profile.csv`.
+
+Release GUI Save As/dirty/cancel/Save/reload and embedded IR display were exercised.
+Output-only built-in speakers run at 48k/128 with advancing callbacks; persisted
+device/preset and startup mute were observed on relaunch. A long embedded IR rejects
+an excessive resampled length with the original cause visible; the final deferred
+automatic recovery and explicit Reconnect both restored 48k/128 with active callbacks.
+The original user preset was restored and survived relaunch, still muted. Its backup
+is `cpp/build/v04-preexisting-session.json`; move/save it outside build before cleaning
+build outputs. Debug and Release build successfully.
+
+**P1 release blocker:** this machine repeatedly stalled when opening the built-in
+microphone inside CoreAudio `AudioDeviceCreateIOProcID` / `AudioDeviceStart`, with
+HAL error `0x10004003`, before DSP processing. No application mutex wait appeared in
+the sampled blocked stack. An initialization marker now skips automatic reopening
+on the next launch after an unfinished start, allowing access to the GUI. This is
+recovery, not a cancellation/timeout of the blocked native call. System audio services
+and privacy settings were not modified. v0.4 input audio and physical unplug/replug
+are **not validated** by the output-only test; diagnose with the external interface
+before declaring daily-use Alpha acceptance. Asynchronous rate-change recovery also
+needs that hardware regression; a deferred retry avoids reopening inside the same
+notification burst, but callback active remains the acceptance criterion.
+
+P2: seamless graph changes/tails, preset folder management, small-display layout,
+live RSS/dropout telemetry and subjective transition listening remain future work.
+Final guitar checks: Input 1/2, meters/CLIP, Mute, Delay sweep with feedback, 1x/2x/4x,
+custom IR Save/relaunch, 48k/128, unplug/reconnect and a sustained playing session.

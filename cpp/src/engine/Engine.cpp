@@ -152,4 +152,19 @@ void Chain::move(std::size_t from, std::size_t to)
     if (from >= effects.size() || to >= effects.size()) throw std::out_of_range("Effect index");
     auto e = std::move(effects[from]); effects.erase(effects.begin() + from); effects.insert(effects.begin() + to, std::move(e));
 }
+Chain cloneConfiguration(const Chain& source)
+{
+    Chain copy;
+    for (const auto& original : source.effects)
+    {
+        auto e = createEffect(original->type, original->id);
+        e->name = original->name; e->bypass.store(original->bypass.load());
+        e->impulseResponse = original->impulseResponse; e->impulseSampleRate = original->impulseSampleRate;
+        e->impulseName = original->impulseName;
+        for (const auto& p : original->parameters) e->parameter(p->info.id)->set(p->target.load());
+        copy.effects.push_back(std::move(e));
+    }
+    return copy;
+}
+
 }

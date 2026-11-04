@@ -32,6 +32,7 @@ juce::var serializePreset(const Chain& chain)
         if (!e->impulseResponse.empty())
         {
             juce::Array<juce::var> ir; for (float x : e->impulseResponse) ir.add(double(x));
+            item->setProperty("ir_name", juce::String(e->impulseName));
             item->setProperty("ir", ir); item->setProperty("ir_sample_rate", e->impulseSampleRate);
         }
         item->setProperty("parameters", juce::var(params.release())); effects.add(juce::var(item.release()));
@@ -76,6 +77,7 @@ Chain loadPreset(const juce::File& file)
         {
             if (e->type != "cabinet" || ir->isEmpty() || ir->size() > 32768) throw std::runtime_error("Invalid embedded IR");
             if (!isNumber(value["ir_sample_rate"])) throw std::runtime_error("Invalid IR sample rate");
+            if(value["ir_name"].isString()) e->impulseName=value["ir_name"].toString().toStdString();
             e->impulseSampleRate = double(value["ir_sample_rate"]);
             if (!std::isfinite(e->impulseSampleRate) || e->impulseSampleRate < 8000 || e->impulseSampleRate > 192000)
                 throw std::runtime_error("Invalid IR sample rate");
