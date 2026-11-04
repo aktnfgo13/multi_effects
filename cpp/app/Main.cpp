@@ -2,6 +2,9 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "Runtime.h"
 #include "AppState.h"
+#include "PresetLibrary.h"
+#include "../ui/AlphaUI.h"
+#include "ProductInfo.h"
 using namespace multi_effects;
 
 class MainComponent final : public juce::Component, private juce::AudioIODeviceCallback,
@@ -19,7 +22,7 @@ public:
         runtime.preferredInput=preferences.input;runtime.io.stereoInput=preferences.stereo;
         lastGoodXml=preferences.deviceXml;
         presetFolder=juce::File(preferences.presetFolder);
-        if(!presetFolder.isDirectory()) presetFolder=settings.getUserSettings()->getFile().getParentDirectory().getChildFile("Presets");
+        if(!presetFolder.isDirectory()) presetFolder=multi_effects::app::userPresetDirectory();
         for(const auto& type:{"noise_gate","compressor","gain","distortion","eq","amp_sim","cabinet","delay","reverb"})
             runtime.chain.effects.push_back(createEffect(type,std::string(type)+"_1"));
         if(preferences.lastPreset.isNotEmpty())
@@ -54,7 +57,7 @@ public:
         save.onClick=[this]{if(session.file==juce::File())chooseSaveAs();else saveTo(session.file,true);};
         saveAs.onClick=[this]{chooseSaveAs();};
         load.onClick=[this]{confirmDiscard([this]{chooseLoad();});};
-        loadSelected.onClick=[this]{const int i=presetList.getSelectedId()-1;if(i>=0&&i<int(presetFiles.size())){const auto file=presetFiles[std::size_t(i)];confirmDiscard([this,file]{loadPreset(file);});}};
+        loadSelected.onClick=[this]{const int i=presetList.getSelectedId()-1;if(i>=0&&i<int(presetFiles.size())){const auto entry=presetFiles[std::size_t(i)];confirmDiscard([this,entry]{if(entry.factory<0){loadPreset(entry.file);return;}try{if(install(entry.load())){session.loaded({});session.displayName=entry.label;refresh();notice("Info: Factory preset loaded; Save creates a user copy.",0);}}catch(const std::exception& e){notice(e.what(),2);}});}};
         presetList.onChange=[this]{loadSelected.setEnabled(presetList.getSelectedId()>0);};
         reconnect.onClick=[this]{rollbackAttempted=false;reconnectDevice();};
         inputSelector.onChange=[this]{
@@ -101,7 +104,7 @@ public:
         list.setBounds(15,82,265,220);up.setBounds(15,312,80,28);down.setBounds(100,312,80,28);remove.setBounds(185,312,95,28);
         types.setBounds(15,350,180,28);add.setBounds(200,350,80,28);
         bypass.setBounds(305,80,240,28);irLoad.setBounds(w-225,80,210,28);
-        for(std::size_t i=0;i<sliders.size();++i){labels[i]->setBounds(305,112+int(i)*60,w-320,22);sliders[i]->setBounds(305,134+int(i)*60,w-320,30);}
+        for(std::size_t i=0;i<rows.size();++i)rows[i]->setBounds(305,112+int(i)*60,w-320,56);
         irStatus.setBounds(305,352,w-320,28);
         deviceWarning.setBounds(15,382,w-30,24);devices.setBounds(15,410,w-30,h-545);
         inputSelector.setBounds(15,h-125,265,28);stereoInput.setBounds(290,h-125,170,28);audioStatus.setBounds(465,h-125,w-480,28);
@@ -151,7 +154,7 @@ private:
     void paintListBoxItem(int row,juce::Graphics& g,int width,int height,bool sel) override
     {
         if(sel)g.fillAll(juce::Colours::darkslateblue);std::lock_guard<std::mutex> lock(runtime.control);
-        if(row>=0&&row<int(runtime.chain.effects.size())){auto& e=*runtime.chain.effects[std::size_t(row)];g.setColour(e.bypass?juce::Colours::grey:juce::Colours::white);g.drawText(juce::String(row+1)+". "+juce::String(e.name)+(e.bypass?" [OFF]":""),8,0,width-10,height,juce::Justification::centredLeft);}
+        if(row>=0&&row<int(runtime.chain.effects.size())){auto& e=*runtime.chain.effects[std::size_t(row)];g.setColour(e.bypass?juce::Colours::grey:juce::Colours::white);g.drawText(multi_effects::ui::effectText(e,row),8,0,width-10,height,juce::Justification::centredLeft);}
     }
     void selectedRowsChanged(int row) override
     {
@@ -159,6 +162,7 @@ private:
         std::vector<Control> controls;bool exists=false,isCabinet=false,isBypassed=false;int count=0;juce::String irText;
         {
             std::lock_guard<std::mutex> lock(runtime.control);
+            irText=multi_effects::ui::cabinetText(runtime.chain);
             count=int(runtime.chain.effects.size());selectedId=row>=0&&row<count?runtime.chain.effects[std::size_t(row)]->id:"";
             if(auto* effect=selectedUnsafe()){
                 exists=true;isCabinet=effect->type=="cabinet";isBypassed=effect->bypass.load();
@@ -167,17 +171,18 @@ private:
             }
         }
         // Do not hold the lifecycle/control mutex while entering GUI/device widgets.
-        sliders.clear();labels.clear();bypass.setEnabled(exists);irLoad.setEnabled(isCabinet);remove.setEnabled(exists);
+        rows.clear();bypass.setEnabled(exists);irLoad.setEnabled(isCabinet);remove.setEnabled(exists);
         up.setEnabled(row>0);down.setEnabled(row>=0&&row+1<count);add.setEnabled(count<24);
         irStatus.setText(irText,juce::dontSendNotification);bypass.setToggleState(isBypassed,juce::dontSendNotification);
         for(auto& p:controls){
-            auto label=std::make_unique<juce::Label>();label->setText(juce::String(p.info.name+" ("+p.info.unit+")"),juce::dontSendNotification);addAndMakeVisible(*label);labels.push_back(std::move(label));
-            auto slider=std::make_unique<juce::Slider>();slider->setRange(p.info.minimum,p.info.maximum,p.info.requiresPrepare?1:0);slider->setNumDecimalPlacesToDisplay(p.info.requiresPrepare?0:2);slider->setValue(p.value,juce::dontSendNotification);slider->setTextBoxStyle(juce::Slider::TextBoxRight,false,100,25);
+            auto control=std::make_unique<multi_effects::ui::ParameterRow>(p.info);control->setValue(p.value);
             const auto effectId=selectedId,paramId=p.info.id;const bool prepare=p.info.requiresPrepare;
-            slider->onValueChange=[this,effectId,paramId,prepare,control=slider.get()]{const float value=float(control->getValue());
-                if(prepare){edit([&](Chain& c){for(auto& e:c.effects)if(e->id==effectId)e->parameter(paramId)->set(value);});}
+            control->onChange=[this,effectId,paramId,prepare](float value){
+                if(prepare){if(!edit([&](Chain& c){for(auto& e:c.effects)if(e->id==effectId)e->parameter(paramId)->set(value);})){
+                    // The control may currently be dispatching a notification; refresh later.
+                    juce::MessageManager::callAsync([safe=juce::Component::SafePointer<MainComponent>(this)]{if(safe)safe->refresh();});}}
                 else {std::lock_guard<std::mutex> lock(runtime.control);for(auto& e:runtime.chain.effects)if(e->id==effectId){e->parameter(paramId)->set(value);session.dirty=true;}}
-            };addAndMakeVisible(*slider);sliders.push_back(std::move(slider));
+            };addAndMakeVisible(*control);rows.push_back(std::move(control));
         }
         resized();
     }
@@ -188,10 +193,9 @@ private:
     }
     void refreshPresets()
     {
-        presetFiles.clear();presetList.clear(juce::dontSendNotification);
-        auto files=presetFolder.findChildFiles(juce::File::findFiles,false,"*.json");files.sort();
-        for(auto& file:files){presetFiles.push_back(file);presetList.addItem(file.getFileNameWithoutExtension(),int(presetFiles.size()));if(file==session.file)presetList.setSelectedId(int(presetFiles.size()),juce::dontSendNotification);}
-        presetList.setTextWhenNothingSelected("Choose preset in current folder");loadSelected.setEnabled(presetList.getSelectedId()>0);
+        presetFiles=multi_effects::app::presetEntries(presetFolder);presetList.clear(juce::dontSendNotification);
+        for(std::size_t i=0;i<presetFiles.size();++i){const auto& entry=presetFiles[i];presetList.addItem(entry.label,int(i+1));if(entry.file!=juce::File()&&entry.file==session.file)presetList.setSelectedId(int(i+1),juce::dontSendNotification);}
+        presetList.setTextWhenNothingSelected("Factory / User presets");loadSelected.setEnabled(presetList.getSelectedId()>0);
     }
     void saveTo(const juce::File& file,bool approved)
     {
@@ -200,6 +204,7 @@ private:
     }
     void chooseSaveAs()
     {
+        if(session.file==juce::File())presetFolder=multi_effects::app::userPresetDirectory();
         if(!presetFolder.isDirectory()){auto result=presetFolder.createDirectory();if(result.failed()){notice("Error: "+result.getErrorMessage(),2);return;}}
         chooser=std::make_unique<juce::FileChooser>("Save preset as",presetFolder.getChildFile(session.file==juce::File()?"Untitled.json":session.file.getFileName()),"*.json");
         chooser->launchAsync(juce::FileBrowserComponent::canSelectFiles|juce::FileBrowserComponent::saveMode,
@@ -280,15 +285,15 @@ private:
         const auto in=runtime.io.inputLevel.consume(),out=runtime.io.outputLevel.consume();inputClipTicks=in.clipped?20:std::max(0,inputClipTicks-1);outputClipTicks=out.clipped?20:std::max(0,outputClipTicks-1);
         const auto level=[](float p){return p>0?juce::String(20*std::log10(p),1)+" dBFS":juce::String("-inf dBFS");};
         levels.setText("Input "+level(in.peak)+(inputClipTicks?" [CLIP]":"")+"    Output "+level(out.peak)+(outputClipTicks?" [CLIP]":"")+(in.invalid||out.invalid?" [INVALID SAMPLE]":""),juce::dontSendNotification);
-        title.setText("Multi Effects Alpha v0.5 | CPU "+juce::String(manager.getCpuUsage()*100,1)+"% | blocks "+juce::String(blocks),juce::dontSendNotification);
+        title.setText(juce::String(multi_effects::product::name)+" "+multi_effects::product::version+" "+multi_effects::product::stage+" | CPU "+juce::String(manager.getCpuUsage()*100,1)+"% | blocks "+juce::String(blocks),juce::dontSendNotification);
         presetTitle.setText("Preset: "+session.title(),juce::dontSendNotification);
         if(++settingsTicks>=10){settingsTicks=0;if(active){settings.getUserSettings()->setValue("audioInitialising",false);if(auto xml=manager.createStateXml())lastGoodXml=xml->toString();rollbackAttempted=false;lastError.clear();}persist();}
     }
     multi_effects::app::Runtime runtime;
     juce::AudioDeviceManager manager;
-    juce::ListBox list;juce::AudioDeviceSelectorComponent devices;
+    juce::ListBox list;juce::AudioDeviceSelectorComponent devices;juce::TooltipWindow tooltips{this,700};
     juce::ApplicationProperties settings;multi_effects::app::Preferences preferences;multi_effects::app::PresetSession session;
-    juce::File presetFolder;std::vector<juce::File> presetFiles;
+    juce::File presetFolder;std::vector<multi_effects::app::PresetEntry> presetFiles;
     juce::TextButton up{"Up"},down{"Down"},remove{"Remove..."},add{"Add"},save{"Save"},saveAs{"Save As..."},load{"Open preset..."},loadSelected{"Load selected"},irLoad{"Load cabinet IR..."},reconnect{"Reconnect audio"};
     juce::ToggleButton stereoInput{"Stereo input pair"};
     juce::ToggleButton mute{"Mute DSP"},bypass{"Bypass selected effect"};
@@ -298,7 +303,7 @@ private:
     int rollbackTicks=0;
     unsigned lastBlocks=0,shownGeneration=0;bool wasActive=false,rollbackAttempted=false;
     juce::String lastGoodXml,lastError;std::string selectedId;
-    std::vector<std::unique_ptr<juce::Slider>> sliders;std::vector<std::unique_ptr<juce::Label>> labels;
+    std::vector<std::unique_ptr<multi_effects::ui::ParameterRow>> rows;
     std::unique_ptr<juce::FileChooser> chooser;
     std::atomic<bool> rollbackRequested{false};std::atomic<unsigned> callbackCount{0};
 };
@@ -311,8 +316,8 @@ public:
 class Application final:public juce::JUCEApplication
 {
 public:
-    const juce::String getApplicationName() override{return "Multi Effects Prototype";}
-    const juce::String getApplicationVersion() override{return "0.5.0";}
+    const juce::String getApplicationName() override{return multi_effects::product::name;}
+    const juce::String getApplicationVersion() override{return multi_effects::product::version;}
     void initialise(const juce::String&) override
     {
         window=std::make_unique<AppWindow>(getApplicationName());window->setUsingNativeTitleBar(true);

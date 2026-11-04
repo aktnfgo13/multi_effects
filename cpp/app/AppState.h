@@ -27,8 +27,9 @@ struct PresetSession
 {
     juce::File file;
     bool dirty=false;
-    juce::String title() const {return (file==juce::File()?juce::String("Untitled"):file.getFileNameWithoutExtension())+(dirty?" *":"");}
-    void loaded(const juce::File& path) {file=path;dirty=false;}
+    juce::String displayName;
+    juce::String title() const {return (file==juce::File()?(displayName.isEmpty()?juce::String("Untitled"):displayName):file.getFileNameWithoutExtension())+(dirty?" *":"");}
+    void loaded(const juce::File& path) {file=path;displayName.clear();dirty=false;}
     void save(const Chain& chain,const juce::File& destination,bool overwriteApproved)
     {
         if(destination.existsAsFile()&&!overwriteApproved)throw std::runtime_error("Overwrite requires confirmation");

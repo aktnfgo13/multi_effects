@@ -1,4 +1,5 @@
 #include "../app/AppState.h"
+#include "../app/PresetLibrary.h"
 #include "TestSupport.h"
 #include <iostream>
 using namespace multi_effects;
@@ -20,6 +21,10 @@ int main(){
         chain.processStereo(left.data(),right.data(),left.size());restored.processStereo(copyLeft.data(),copyRight.data(),copyLeft.size());
         require(left==copyLeft&&right==copyRight,"stereo preset processing roundtrip");
         session.dirty=true;requireRejected([&]{session.save(chain,dir.getChildFile("absent/failed.json"),false);},"failed save accepted");require(session.file==b&&session.dirty,"failed save changed current preset");
+        auto factory=app::factoryPreset(0);const auto factoryCopy=dir.getChildFile("Clean user copy.json");
+        session.loaded({});session.displayName="Factory / Clean";require(session.title()=="Factory / Clean","factory current title");
+        session.save(factory,factoryCopy,false);auto factoryLoaded=app::loadPreset(factoryCopy);
+        require(app::presetFingerprint(factory)==app::presetFingerprint(factoryLoaded)&&!session.dirty&&session.displayName.isEmpty(),"factory user copy roundtrip");
         std::cout<<"Settings disk roundtrip/fallback; Save/Save As/overwrite/failure state; IR metadata PASS\n";
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

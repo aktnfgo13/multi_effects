@@ -26,6 +26,7 @@ Processor::Processor():AudioProcessor(BusesProperties().withInput("Input",juce::
         for(const auto& p:d.parameters){const auto id=prefix+juce::String(p.id);mappings.push_back({d.type,p.id,id,parameters.getRawParameterValue(id),false,p.requiresPrepare});if(p.requiresPrepare)parameters.addParameterListener(id,this);}
     }
     for(const auto* type:{"noise_gate","compressor","gain","distortion","eq","amp_sim","cabinet","delay","reverb"})model.effects.push_back(createEffect(type,std::string(type)+"_1"));
+    {auto initial=cloneConfiguration(model);applyTargets(initial);cleanFingerprint=app::presetFingerprint(initial);}
     worker=std::thread([this]{runWorker();});
 }
 Processor::~Processor() {
@@ -101,11 +102,12 @@ bool Processor::install(Chain candidate,const juce::String& name) {
         const float v=m.bypass?float(e->bypass.load()):e->parameter(m.key)->target.load();
         auto* p=parameters.getParameter(m.hostId);p->setValueNotifyingHost(p->convertTo0to1(v));
     }
-    lock.lock();model.effects.swap(candidate.effects);if(name.isNotEmpty())presetName=name;revision.fetch_add(1);installing=false;error.clear();return true;
+    lock.lock();model.effects.swap(candidate.effects);if(name.isNotEmpty()){presetName=name;{auto initial=cloneConfiguration(model);applyTargets(initial);cleanFingerprint=app::presetFingerprint(initial);}restoredModified=false;}uiGeneration.fetch_add(1);revision.fetch_add(1);installing=false;error.clear();return true;
 }
 void Processor::getStateInformation(juce::MemoryBlock& dest) {
     std::lock_guard<std::mutex> lock(control);auto c=cloneConfiguration(model);applyTargets(c);auto root=std::make_unique<juce::DynamicObject>();root->setProperty("plugin_state",1);root->setProperty("preset",app::serializePreset(c));root->setProperty("bypass",globalBypass->load()>=.5f);
     root->setProperty("preset_name",presetName);
+    root->setProperty("preset_modified",restoredModified||app::presetFingerprint(c)!=cleanFingerprint);
     const auto text=juce::JSON::toString(juce::var(root.release()));dest.replaceAll(text.toRawUTF8(),text.getNumBytesAsUTF8());
 }
 void Processor::setStateInformation(const void* data,int bytes) {
@@ -114,8 +116,12 @@ void Processor::setStateInformation(const void* data,int bytes) {
         if(int(root["plugin_state"])!=1||!root["bypass"].isBool())throw std::runtime_error("Unsupported plugin state");
         auto c=app::deserializePreset(root["preset"]);if(!install(std::move(c),root["preset_name"].toString()))return;
         parameters.getParameter("plugin.bypass")->setValueNotifyingHost(bool(root["bypass"])?1.f:0.f);
+        {std::lock_guard<std::mutex> lock(control);restoredModified=bool(root.getProperty("preset_modified",false));}
     }catch(const std::exception& e){std::lock_guard<std::mutex> lock(control);error=juce::String("State rejected: ")+e.what();}
 }
+bool Processor::presetModified(){std::lock_guard<std::mutex> lock(control);auto c=cloneConfiguration(model);applyTargets(c);return restoredModified||app::presetFingerprint(c)!=cleanFingerprint;}
+juce::String Processor::presetTitle(){std::lock_guard<std::mutex> lock(control);return presetName;}
+void Processor::markPresetSaved(const juce::String& name,std::uint64_t fingerprint){std::lock_guard<std::mutex> lock(control);presetName=name;cleanFingerprint=fingerprint;restoredModified=false;}
 juce::String Processor::statusText(){std::lock_guard<std::mutex> lock(control);return error.isNotEmpty()?error:juce::String("Preset: ")+presetName;}
 juce::String Processor::chainText(){std::lock_guard<std::mutex> lock(control);juce::String text;for(const auto& e:model.effects){if(text.isNotEmpty())text+=" > ";text+=juce::String(e->name);}return text;}
 }

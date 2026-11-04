@@ -1,6 +1,8 @@
 #pragma once
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../app/PresetIO.h"
+#include "../app/PresetLibrary.h"
+#include "ProductInfo.h"
 #include "engine/AudioIO.h"
 #include <mutex>
 #include <thread>
@@ -11,7 +13,7 @@ class Processor final : public juce::AudioProcessor, private juce::AudioProcesso
 public:
     Processor();
     ~Processor() override;
-    const juce::String getName() const override { return "Multi Effects"; }
+    const juce::String getName() const override { return product::name; }
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     double getTailLengthSeconds() const override { return 300; }
@@ -35,6 +37,10 @@ public:
     bool install(Chain,const juce::String& presetName);
     juce::String statusText();
     juce::String chainText();
+    juce::String presetTitle();
+    bool presetModified();
+    void markPresetSaved(const juce::String&, std::uint64_t fingerprint);
+    std::atomic<unsigned> uiGeneration{0};
     void serviceConfiguration();
     void refreshLatency();
     juce::AudioProcessorValueTreeState parameters;
@@ -66,6 +72,8 @@ private:
     ProcessSpec spec{48000,128,2};
     juce::String error,presetName="Default";
     bool prepared=false;
+    std::uint64_t cleanFingerprint=0;
+    bool restoredModified=false;
     unsigned builtRevision=0;
     std::atomic<unsigned> revision{1};
     std::atomic<bool> quitting{false};

@@ -1,11 +1,15 @@
-# macOS Standalone Prototype
+# Multi Effects 0.7.0 Alpha — macOS
 
-A runnable JUCE standalone prototype now connects the independent C++17 DSP core
-with device selection, a reorderable mono effect chain, metadata-driven controls,
-bypass, cabinet WAV IR loading, and versioned JSON presets.
+Standalone, AU and VST3 share a JUCE-independent C++17 stereo DSP core. The Alpha
+UI provides a persistent effect chain, selected-effect controls, Factory/User
+presets, embedded cabinet IR, meters and latency status. Standalone also provides
+input routing and audio-device selection and starts muted.
 
-Build and operation: [Standalone prototype guide](docs/standalone-prototype.md).
-The app starts muted. The Python research/reference implementation below is preserved.
+Build paths, local plugin installation, user data, signing limitations and the
+acceptance checklist: [macOS Alpha guide](docs/macos-alpha.md).
+Adapter/automation contract: [AU/VST3 guide](docs/macos-plugin.md).
+These are local test builds, not signed/notarized distribution packages. The Python
+research/reference implementation below is preserved.
 
 ---
 

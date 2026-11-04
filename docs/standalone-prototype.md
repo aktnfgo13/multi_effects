@@ -1,3 +1,5 @@
+Current Alpha UI, product identity, data layout and distribution notes: [macOS v0.7 Alpha](macos-alpha.md).
+
 # Standalone prototype
 
 The opt-in macOS AU/VST3 adapter is documented in [macOS plugins](macos-plugin.md).

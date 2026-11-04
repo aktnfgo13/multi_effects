@@ -1,0 +1,6 @@
+#pragma once
+namespace multi_effects::product {
+inline constexpr const char* name = "@MULTI_EFFECTS_PRODUCT_NAME@";
+inline constexpr const char* version = "@MULTI_EFFECTS_PRODUCT_VERSION@";
+inline constexpr const char* stage = "@MULTI_EFFECTS_PRODUCT_STAGE@";
+}

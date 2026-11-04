@@ -1,6 +1,7 @@
 #include "AllocationTracker.h"
 #include "TestSupport.h"
 #include "../plugin/PluginProcessor.h"
+#include "../ui/AlphaUI.h"
 #include <iostream>
 #include <chrono>
 using namespace multi_effects;
@@ -42,6 +43,30 @@ static void automation(){
     p.releaseResources();b.clear();pump(p,b);require(b.getMagnitude(0,512)==0,"release resources output");
 }
 static void concurrent(){Processor p;p.prepareToPlay(48000,128);std::atomic<bool> done{false};std::thread writer([&]{for(int i=0;i<100;++i){set(p,"gain.gain_db",float(i%12));set(p,"distortion.oversampling",float(i%3));juce::MemoryBlock data;p.getStateInformation(data);}done=true;});juce::AudioBuffer<float> b(2,128);for(int k=0;k<3000||!done;++k){b.clear();pump(p,b);}writer.join();}
+static void alphaUX(){
+    require(app::userPresetDirectory().getFullPathName().endsWith("Library/Application Support/Multi Effects/Presets"),"user data location");
+    for(int i=0;i<5;++i){auto c=app::factoryPreset(i);auto restored=app::deserializePreset(app::serializePreset(c));
+        require(app::presetFingerprint(c)==app::presetFingerprint(restored),"factory roundtrip");
+        for(const auto& e:c.effects){require(e->impulseResponse.empty(),"factory contains unlicensed IR");for(const auto& p:e->parameters)require(p->target>=p->info.minimum&&p->target<=p->info.maximum,"factory parameter range");}
+        c.prepare({48000,128,2});std::array<float,128> l{},r{};l[0]=.1f;r[0]=-.1f;c.processStereo(l.data(),r.data(),128);for(float v:l)require(std::isfinite(v),"factory processing");}
+    Processor p;require(!p.presetModified(),"initial modified");
+    auto editor=std::unique_ptr<juce::AudioProcessorEditor>(p.createEditor());
+    juce::ListBox* list=nullptr;for(auto* child:editor->getChildren())if(auto* box=dynamic_cast<juce::ListBox*>(child))list=box;
+    require(list&&list->getModel()->getNumRows()==9,"chain always available");
+    auto controls=[&]{std::vector<ui::ParameterRow*> result;for(auto* child:editor->getChildren())if(auto* row=dynamic_cast<ui::ParameterRow*>(child))result.push_back(row);return result;};
+    for(int index:{0,2,5,8,2}){list->selectRow(index);auto rows=controls();require(rows.size()==p.snapshot().effects[std::size_t(index)]->parameters.size(),"selected parameter panel size");}
+    auto rows=controls();require(rows.size()==1&&rows[0]->info.id=="gain_db","selected gain binding");
+    rows[0]->slider.setValue(3,juce::sendNotificationSync);require(p.parameters.getRawParameterValue("gain.gain_db")->load()==3&&p.presetModified(),"UI to host parameter");
+    set(p,"gain.gain_db",-4);require(rows[0]->value()==p.parameters.getRawParameterValue("gain.gain_db")->load(),"host automation to UI");
+    list->selectRow(5);rows=controls();require(rows.back()->info.requiresPrepare,"oversampling choice");rows.back()->choice.setSelectedId(3,juce::sendNotificationSync);require(p.parameters.getRawParameterValue("amp_sim.oversampling")->load()==2,"choice to stable host ID");
+    require(ui::parameterText(rows.back()->info,2)=="4x","oversampling formatting");
+    auto snapshot=p.snapshot();p.markPresetSaved("User test",app::presetFingerprint(snapshot));require(!p.presetModified(),"saved baseline");
+    set(p,"gain.gain_db",1);juce::MemoryBlock data;p.getStateInformation(data);Processor restored;restored.setStateInformation(data.getData(),int(data.getSize()));require(restored.presetModified()&&restored.presetTitle()=="User test","modified state restore");
+    auto root=juce::JSON::parse(juce::String::fromUTF8(static_cast<const char*>(data.getData()),int(data.getSize())));root.getDynamicObject()->removeProperty("preset_modified");const auto old=juce::JSON::toString(root);restored.setStateInformation(old.toRawUTF8(),int(old.getNumBytesAsUTF8()));require(!restored.presetModified(),"v06 state compatibility");
+    editor.reset();auto duplicate=p.snapshot();duplicate.effects.push_back(createEffect("gain","duplicate"));require(p.install(std::move(duplicate),"Duplicates"),"duplicate install");editor.reset(p.createEditor());list=nullptr;for(auto* child:editor->getChildren())if(auto* box=dynamic_cast<juce::ListBox*>(child))list=box;
+    require(list!=nullptr,"duplicate list");list->selectRow(9);rows=controls();require(rows.size()==1&&!rows[0]->isEnabled(),"duplicate must not edit first bank");
+    std::cout<<"Alpha factory presets/shared controls/selection/automation/state PASS\n";
+}
 static void profile(){
     std::cout<<"factor,dsp_mean_us,dsp_max_us,adapter_mean_us,adapter_max_us,max_deadline_percent\n";
     for(int mode:{0,1,2}){Processor p;set(p,"distortion.oversampling",float(mode));set(p,"amp_sim.oversampling",float(mode));p.prepareToPlay(48000,128);auto c=p.snapshot();c.prepare({48000,128,2});juce::AudioBuffer<float> b(2,128);std::array<float,128> l{},r{};double ds=0,dm=0,as=0,am=0;
@@ -49,4 +74,4 @@ static void profile(){
             auto start=std::chrono::steady_clock::now();c.processStereo(l.data(),r.data(),128);double d=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-start).count();start=std::chrono::steady_clock::now();pump(p,b);double a=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-start).count();if(k>=100){ds+=d;as+=a;dm=std::max(dm,d);am=std::max(am,a);}}
         std::cout<<(1<<mode)<<','<<ds/2000<<','<<dm<<','<<as/2000<<','<<am<<','<<am/2666.6667*100<<'\n';}
 }
-int main(int argc,char** argv){juce::ScopedJuceInitialiser_GUI init;try{if(argc>1&&std::string(argv[1])=="profile"){profile();return 0;}if(argc>1)concurrent();else{matrix();state();automation();}require(allocation_tracker::processAllocations==0&&allocation_tracker::processFrees==0,"plugin process allocated/freed");std::cout<<"Plugin lifecycle/state/stereo/automation/allocation PASS\n";}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(int argc,char** argv){juce::ScopedJuceInitialiser_GUI init;try{if(argc>1&&std::string(argv[1])=="profile"){profile();return 0;}if(argc>1&&std::string(argv[1])=="alpha")alphaUX();else if(argc>1)concurrent();else{matrix();state();automation();}require(allocation_tracker::processAllocations==0&&allocation_tracker::processFrees==0,"plugin process allocated/freed");std::cout<<"Plugin lifecycle/state/stereo/automation/allocation PASS\n";}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

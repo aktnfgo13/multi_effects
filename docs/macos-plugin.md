@@ -1,3 +1,5 @@
+Current Alpha UI, product identity, data layout and distribution notes: [macOS v0.7 Alpha](macos-alpha.md).
+
 # macOS AU / VST3 v0.6
 
 The plugin wraps the existing v0.5 stereo Core without modifying DSP algorithms.
