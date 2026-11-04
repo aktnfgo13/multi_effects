@@ -49,6 +49,10 @@ Chain loadPreset(const juce::File& file)
     juce::var json;
     const auto parsed = juce::JSON::parse(file.loadFileAsString(), json);
     if (parsed.failed()) throw std::runtime_error(parsed.getErrorMessage().toStdString());
+    return deserializePreset(json);
+}
+Chain deserializePreset(const juce::var& json)
+{
     if (!(json["version"].isInt() || json["version"].isInt64())) throw std::runtime_error("Invalid preset version");
     const int version = int(json["version"]);
     if (version == 3 && json["schema"].toString() != "multi-effects") throw std::runtime_error("Unknown preset schema");

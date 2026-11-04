@@ -13,6 +13,7 @@ struct ImpulseAsset
 };
 juce::var serializePreset(const Chain& chain);
 void savePreset(const Chain& chain, const juce::File& file);
+Chain deserializePreset(const juce::var& json);
 Chain loadPreset(const juce::File& file);
 ImpulseAsset loadImpulse(const juce::File& file);
 }

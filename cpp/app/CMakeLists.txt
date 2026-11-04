@@ -4,6 +4,7 @@ FetchContent_Declare(JUCE
     GIT_TAG 29396c22c93392d6738e021b83196283d6e4d850
     GIT_PROGRESS TRUE)
 FetchContent_MakeAvailable(JUCE)
+if(MULTI_EFFECTS_BUILD_APP)
 juce_add_gui_app(MultiEffectsStandalone
     VERSION 0.5.0
     PRODUCT_NAME "Multi Effects Prototype"
@@ -17,6 +18,7 @@ target_link_libraries(MultiEffectsStandalone PRIVATE multi_effects_dsp juce::juc
 
 # Shared application IO: tests exercise the same implementation as the GUI.
 target_sources(MultiEffectsStandalone PRIVATE PresetIO.cpp)
+endif()
 add_executable(test_preset_ir ../tests/test_preset_ir.cpp PresetIO.cpp)
 target_compile_definitions(test_preset_ir PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 target_link_libraries(test_preset_ir PRIVATE multi_effects_dsp juce::juce_audio_formats)
@@ -26,3 +28,7 @@ add_executable(test_app_state ../tests/test_app_state.cpp PresetIO.cpp)
 target_compile_definitions(test_app_state PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
 target_link_libraries(test_app_state PRIVATE multi_effects_dsp juce::juce_audio_formats juce::juce_data_structures)
 add_test(NAME AlphaSettingsPresetUX COMMAND test_app_state)
+
+if(MULTI_EFFECTS_BUILD_PLUGIN)
+    add_subdirectory(../plugin ${CMAKE_CURRENT_BINARY_DIR}/plugin)
+endif()

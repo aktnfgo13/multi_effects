@@ -357,8 +357,9 @@ target_link_libraries(prototype_cli PRIVATE multi_effects_dsp)
 
 target_sources(multi_effects_dsp PRIVATE src/engine/Engine.cpp)
 
+option(MULTI_EFFECTS_BUILD_PLUGIN "Build macOS AU and VST3" OFF)
 option(MULTI_EFFECTS_BUILD_APP "Build JUCE standalone prototype" OFF)
-if(MULTI_EFFECTS_BUILD_APP)
+if(MULTI_EFFECTS_BUILD_APP OR MULTI_EFFECTS_BUILD_PLUGIN)
     enable_language(C)
     add_subdirectory(app)
 endif()

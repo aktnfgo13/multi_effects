@@ -1,5 +1,8 @@
 # Standalone prototype
 
+The opt-in macOS AU/VST3 adapter is documented in [macOS plugins](macos-plugin.md).
+Standalone remains independently buildable with `MULTI_EFFECTS_BUILD_PLUGIN=OFF`.
+
 Current development: **v0.5 Stereo Alpha candidate**. v0.3 external guitar/interface testing
 was reported successful by the user. v0.4 hardware input/reconnect acceptance remains
 pending; see the CoreAudio limitation and validation record at the end.
