@@ -74,6 +74,65 @@ static Chain defaultChain()
 {
     auto chain = makeTestChain(); chain.effects.pop_back(); return chain;
 }
+static void inputSystem()
+{
+    InputSystem a,b;
+    a.prepare(48000);b.prepare(48000);
+    std::array<float,960> left,right,mono;
+    left.fill(.25f);right.fill(-.5f);mono=left;
+    {
+        allocation_tracker::ProcessScope scope;
+        a.process(left.data(),right.data(),left.size());
+        b.process(mono.data(),nullptr,mono.size());
+    }
+    require(left==mono && right[0]==-.5f && right.back()==-.5f,"unity lanes");
+    require(a.peak==.5f && std::abs(a.rms-std::sqrt(.15625f))<1e-7f && b.rms==.25f,"window meters");
+    for(float db:{12.f,-12.f,0.f}) {
+        a.setTrimDb(db);b.setTrimDb(db);
+        left.fill(1);right.fill(-.5f);mono=left;
+        const float initial=a.peak.load();
+        {
+            allocation_tracker::ProcessScope scope;
+            a.process(left.data(),right.data(),left.size());
+            for(std::size_t pos=0;pos<mono.size();){
+                auto n=std::min(1+pos%97,mono.size()-pos);
+                b.process(mono.data()+pos,nullptr,n);pos+=n;
+            }
+        }
+        const float target=std::pow(10.f,db/20);
+        require(left==mono && left[239]==left.back() && left.front()!=left[239],"continuous partition independent ramp");
+        require(std::abs(left.back()-target)<1e-6f && right.back()==-.5f*left.back(),"trim gain and stereo balance");
+        if(db==12) require(initial==.5f && a.clipped.exchange(false) && left.back()>1,"hot input retained");
+    }
+    a.reset();require(a.rms==0 && a.peak==0 && !a.clipped,"reset telemetry");
+    left.fill(.125f);left[0]=NAN;left[1]=INFINITY;left[2]=-INFINITY;
+    a.process(left.data(),nullptr,left.size());
+    require(left[0]==0 && left[1]==0 && left[2]==0 && a.invalid && left.back()==.125f,"invalid and DC");
+    for(int os:{0,1,2}) {
+        auto direct=createEffect("custom_drive","reference"),through=createEffect("custom_drive","through");
+        for(auto* e:{direct.get(),through.get()}) {
+            e->parameter("oversampling")->set(float(os));e->parameter("grain")->set(76);
+            e->prepare({48000,128,2});
+        }
+        for(int block=0;block<100;++block){
+            for(int i=0;i<128;++i){left[i]=testSignal(block*128+i,48000);right[i]=-.75f*left[i];}
+            auto l=left,r=right;
+            {allocation_tracker::ProcessScope scope;
+             a.process(left.data(),right.data(),128);through->processStereo(left.data(),right.data(),128);
+             direct->processStereo(l.data(),r.data(),128);}
+            require(left==l && right==r,"approved OD direct/trimmed render");
+        }
+    }
+    require(allocation_tracker::processAllocations==0 && allocation_tracker::processFrees==0,"input heap traffic");
+    a.reset();double total=0,worst=0;
+    for(int block=0;block<10000;++block) {
+        auto start=std::chrono::steady_clock::now();a.process(left.data(),right.data(),128);
+        double us=std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-start).count();
+        if(block>=100){total+=us;worst=std::max(worst,us);}
+    }
+    std::cout<<"Stereo input only 48k/128 mean_us="<<total/9900<<" max_us="<<worst<<"\n";
+}
+
 static void matrix()
 {
     for (double rate : {44100., 48000., 96000.}) for (std::size_t block : {64, 128, 256, 512})
@@ -129,6 +188,6 @@ static void timing()
 }
 int main(int argc,char** argv)
 {
-    try {if(argc>1 && std::string(argv[1])=="controls")concurrent();else {routingAndMeters();matrix();timing();}}
+    try {if(argc>1 && std::string(argv[1])=="controls")concurrent();else {inputSystem();routingAndMeters();matrix();timing();}}
     catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}
 }

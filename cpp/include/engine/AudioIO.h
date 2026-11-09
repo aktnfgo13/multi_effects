@@ -1,5 +1,6 @@
 #pragma once
 #include "Engine.h"
+#include "InputSystem.h"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -41,6 +42,7 @@ public:
     std::atomic<int> selectedInput{0}; // Physical device index, not packed callback index.
     std::atomic<bool> muted{true};
     std::atomic<bool> stereoInput{false}; // Selected physical input and its next channel.
+    InputSystem input;
     LevelMeter inputLevel, outputLevel;
     // Lifecycle and channel-map mutation require a stopped callback.
     void prepare(Chain& chain, ProcessSpec spec, std::vector<int> activeInputs)
@@ -59,10 +61,11 @@ public:
         routeInput_ = selectedInput.load(); routeGain_ = 1; routeStep_ = float(1.0 / std::max(1.0, spec.sampleRate * .005));
         outputGain_ = 0;
         inputLevel.consume(); outputLevel.consume();
+        input.prepare(spec.sampleRate);
         chain.prepare(spec);
         ready_ = true;
     }
-    void stop() noexcept { ready_ = false; }
+    void stop() noexcept { ready_ = false; input.reset(); }
     void process(Chain& chain, AudioBlock block) noexcept
     {
         if (!ready_)
@@ -115,6 +118,7 @@ public:
                     rightScratch_[i] = r * routeGain_;
                 }
             }
+            input.process(scratch_.data(), stereo_ ? rightScratch_.data() : nullptr, n);
             if (stereo_) chain.processStereo(scratch_.data(), rightScratch_.data(), n);
             else chain.process(scratch_.data(), n);
             for (std::size_t i = 0; i < n; ++i)

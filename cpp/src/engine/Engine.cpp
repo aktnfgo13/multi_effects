@@ -5,6 +5,7 @@
 #include "effects/NoiseGate.h"
 #include "effects/Compressor.h"
 #include "effects/Distortion.h"
+#include "effects/CustomDrive.h"
 #include <stdexcept>
 
 namespace multi_effects
@@ -20,6 +21,12 @@ Parameter* Effect::parameter(const std::string& key)
     for (auto& p : parameters) if (p->info.id == key) return p.get();
     return nullptr;
 }
+struct CustomDriveLane {
+    CustomDrive drive;
+    float operator()(float x,const std::vector<float>& p) {
+        return drive.processSample(x,{p[0],p[1],p[2],p[3],p[4],p[5],p[6]});
+    }
+};
 class Builtin final : public Effect
 {
 public:
@@ -42,7 +49,7 @@ public:
         invalidSampleCount = 0;
         for (std::size_t i = 0; i < parameters.size(); ++i) values_[i] = parameters[i]->target.load();
         latency_ = cabinetLatency_ ? 128 : 0;
-        if (type == "distortion" || type == "amp_sim")
+        if (type == "distortion" || type == "amp_sim" || type == "custom_drive")
             latency_ = values_.back() == 0 ? 0 : (type == "amp_sim" ? 128 : 64);
         processor_ = definition_.create(spec_.sampleRate, values_);
         if (type == "cabinet" && !impulseResponse.empty())
@@ -92,6 +99,18 @@ public:
         coefficient_ = float(std::exp(-1.0 / (spec_.sampleRate * .02)));
         wet_ = bypass.load() ? 0.f : 1.f;
         dryDelay_.fill(0); dryIndex_ = 0;
+    }
+    float appliedGrain() const noexcept override {
+        const auto* lane=processor_.target<CustomDriveLane>();
+        return lane ? lane->drive.appliedGrain() : -1.f;
+    }
+    float appliedMix() const noexcept override {
+        const auto* lane=processor_.target<CustomDriveLane>();
+        return lane ? lane->drive.appliedMix() : -1.f;
+    }
+    float appliedHeadroom() const noexcept override {
+        const auto* lane=processor_.target<CustomDriveLane>();
+        return lane ? lane->drive.appliedHeadroom() : -1.f;
     }
     StereoPolicy stereoPolicy() const noexcept override {
         return type == "delay" || type == "reverb" ? StereoPolicy::Decorrelated : StereoPolicy::DualMono;
@@ -170,7 +189,9 @@ const std::vector<EffectDefinition>& registry()
         {"reverb", "Reverb", {{"room_size", "Room", "", 0, 1, .6f}, {"damping", "Damping", "", 0, .99f, .4f}, {"mix", "Mix", "", 0, 1, .15f}},
             [](double sr, const auto&) { Reverb r; r.prepare(sr); return [r = std::move(r)](float x, const auto& p) mutable { return r.processSample(x, p[0], p[1], p[2]); }; }},
         {"tremolo", "Tremolo", {{"rate_hz", "Rate", "Hz", .1f, 20, 4}, {"depth", "Depth", "", 0, 1, .5f}},
-            [](double sr, const auto&) { Tremolo t; t.prepare(sr); return [t](float x, const auto& p) mutable { return t.processSample(x, p[0], p[1]); }; }}
+            [](double sr, const auto&) { Tremolo t; t.prepare(sr); return [t](float x, const auto& p) mutable { return t.processSample(x, p[0], p[1]); }; }},
+        {"custom_drive", "Custom Drive", {{"drive", "Drive", "%", 0, 100, 50}, {"tone", "Tone", "%", 0, 100, 50}, {"crunch", "Crunch", "%", 0, 100, 50}, {"headroom", "Headroom", "%", 0, 100, 50}, {"grain", "Grain", "%", 0, 100, 25}, {"level_db", "Level", "dB", -24, 12, -6}, {"mix", "Mix", "", 0, 1, 1, false}, {"oversampling", "Oversampling", "0=1x 1=2x 2=4x", 0, 2, 1, false, true}},
+            [](double sr, const auto& initial) { CustomDrive d; d.prepare(sr,1 << int(initial[7])); return CustomDriveLane{std::move(d)}; }}
     };
     return definitions;
 }

@@ -7,21 +7,24 @@ public:
         for(auto* l:{&title,&preset,&meters,&status,&irStatus,&selection})addAndMakeVisible(*l);
         for(auto* b:{&load,&save,&saveAs,&ir,&loadSelected})addAndMakeVisible(*b);
         addAndMakeVisible(list);addAndMakeVisible(browser);addAndMakeVisible(bypass);addAndMakeVisible(globalBypass);
+        addAndMakeVisible(trim);addAndMakeVisible(trimLabel);
+        trimLabel.setText("Input Trim",juce::dontSendNotification);
+        trimAttachment=std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(owner.parameters,"input.trim",trim);
         globalAttachment=std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(owner.parameters,"plugin.bypass",globalBypass);
         load.onClick=[this]{confirmDiscard([this]{choose(false);});};saveAs.onClick=[this]{choose(true);};
         save.onClick=[this]{if(currentFile==juce::File())choose(true);else saveFile(currentFile);};
         loadSelected.onClick=[this]{const int i=browser.getSelectedId()-1;if(i<0||i>=int(entries.size()))return;const auto entry=entries[std::size_t(i)];confirmDiscard([this,entry]{try{if(!owner.install(entry.load(),entry.label))throw std::runtime_error(owner.statusText().toStdString());refreshChain();currentFile=entry.file;localError.clear();}catch(const std::exception& e){localError=juce::String("Preset error: ")+e.what();}});};
         ir.onClick=[this]{chooseIR();};
-        title.setText(juce::String(product::name)+" "+product::version+" "+product::stage,juce::dontSendNotification);
+        title.setText(product::displayTitle,juce::dontSendNotification);
         setSize(900,620);refreshBrowser();refreshChain();startTimerHz(4);
     }
     ~Editor() override {stopTimer();clearBindings();}
     void resized() override {
         title.setBounds(12,8,620,28);globalBypass.setBounds(720,8,165,28);
-        preset.setBounds(12,40,870,26);browser.setBounds(12,72,285,28);loadSelected.setBounds(305,72,85,28);
+        preset.setBounds(12,40,485,26);trimLabel.setBounds(500,40,85,26);trim.setBounds(585,40,300,26);browser.setBounds(12,72,285,28);loadSelected.setBounds(305,72,85,28);
         load.setBounds(400,72,105,28);save.setBounds(515,72,80,28);saveAs.setBounds(605,72,105,28);
         list.setBounds(12,112,270,355);selection.setBounds(300,110,580,28);bypass.setBounds(300,142,260,26);
-        for(std::size_t i=0;i<rows.size();++i)rows[i]->setBounds(300,174+int(i)*60,580,56);
+        for(std::size_t i=0;i<rows.size();++i){const int width=rows.size()>4?290:580;rows[i]->setBounds(300+int(i/4)*width,174+int(i%4)*60,width-10,56);}
         irStatus.setBounds(12,478,675,28);ir.setBounds(700,478,185,28);
         meters.setBounds(12,515,875,28);status.setBounds(12,550,875,55);
     }
@@ -90,11 +93,17 @@ private:
         const auto in=owner.inputLevel.consume(),out=owner.outputLevel.consume();
         inClip=in.clipped?8:std::max(0,inClip-1);outClip=out.clipped?8:std::max(0,outClip-1);
         const auto db=[](float v){return v>0?juce::String(20*std::log10(v),1):juce::String("-inf");};
-        meters.setText("Input "+db(in.peak)+" dBFS"+(inClip?" CLIP":"")+" | Output "+db(out.peak)+" dBFS"+(outClip?" CLIP":"")+" | Latency "+juce::String(owner.getLatencySamples())+" samples",juce::dontSendNotification);
-        juce::String modes;for(const auto* type:{"distortion","amp_sim"})if(std::any_of(view.effects.begin(),view.effects.end(),[type](const auto& e){return e->type==type;}))modes+=juce::String(type)+" "+juce::String(1<<int(owner.parameters.getRawParameterValue(juce::String(type)+".oversampling")->load()))+"x  ";
-        status.setText((globalBypass.getToggleState()?"BYPASS | ":"DSP enabled (host controls playback) | ")+modes+"\n"+(localError.isEmpty()?owner.statusText():localError+" | "+owner.statusText()),juce::dontSendNotification);
+        const float grain=owner.grainReadback.load(std::memory_order_relaxed);
+        const float mix=owner.mixReadback.load(std::memory_order_relaxed);
+        const float headroom=owner.headroomReadback.load(std::memory_order_relaxed);
+        const auto grainStatus=grain<0 ? juce::String("no rendered Custom Drive") : juce::String(grain,2);
+        meters.setText("Input "+db(in.peak)+" dBFS"+(inClip?" CLIP":"")+(in.invalid?" INVALID":"")+" | Output "+db(out.peak)+" dBFS"+(outClip?" CLIP":"")+" | Latency "+juce::String(owner.getLatencySamples())+" samples | Grain DSP: "+grainStatus+" | Headroom DSP: "+(headroom<0?juce::String("—"):juce::String(headroom,2))+" | Mix DSP: "+(mix<0?juce::String("—"):juce::String(mix*100,1)+"%"),juce::dontSendNotification);
+        juce::String modes;for(const auto* type:{"distortion","amp_sim","custom_drive"})if(std::any_of(view.effects.begin(),view.effects.end(),[type](const auto& e){return e->type==type;}))modes+=juce::String(type)+" "+juce::String(1<<int(owner.parameters.getRawParameterValue(juce::String(type)+".oversampling")->load()))+"x  ";
+        status.setText((globalBypass.getToggleState()?"BYPASS | ":"DSP enabled (host controls playback) | ")+modes+" | "+ui::inputReading(owner.input)+"\n"+(localError.isEmpty()?owner.statusText():localError+" | "+owner.statusText()),juce::dontSendNotification);
     }
     Processor& owner;Chain view;juce::ListBox list;juce::TooltipWindow tooltips{this,700};
+    ui::InputTrimSlider trim;juce::Label trimLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> trimAttachment;
     juce::Label title,preset,meters,status,irStatus,selection;juce::ComboBox browser;
     juce::TextButton load{"Open..."},save{"Save"},saveAs{"Save As..."},loadSelected{"Load"},ir{"Load user IR..."};
     juce::ToggleButton bypass{"Bypass selected effect"},globalBypass{"Plugin bypass"};

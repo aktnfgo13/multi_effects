@@ -1,4 +1,14 @@
-# Multi Effects 0.7.0 Alpha — macOS
+# Multi Effects 0.8.0 Alpha — macOS
+
+Custom Drive current comparison candidate: [Reversed Headroom / texture Grain](docs/custom-drive-macro4.md).
+
+Previous Custom Drive range/Headroom candidate: [Macro 3 listening guide](docs/custom-drive-macro3.md).
+
+Previous Custom Drive second macro candidate: [Macro 2 listening guide](docs/custom-drive-macro2.md).
+
+First Custom Drive listening revision and offline A/B: [Quality Lab](docs/custom-drive-tuning.md).
+
+Initial Custom Drive implementation and baseline measurements: [v0.8 Custom Drive](docs/custom-drive.md).
 
 Standalone, AU and VST3 share a JUCE-independent C++17 stereo DSP core. The Alpha
 UI provides a persistent effect chain, selected-effect controls, Factory/User

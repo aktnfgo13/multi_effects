@@ -20,6 +20,11 @@ public:
         settings.setStorageParameters(options);
         preferences=multi_effects::app::Preferences::read(*settings.getUserSettings());
         runtime.preferredInput=preferences.input;runtime.io.stereoInput=preferences.stereo;
+        runtime.io.input.setTrimDb(float(settings.getUserSettings()->getDoubleValue("inputTrimDb",0.)));
+        trim.setValue(runtime.io.input.trimDb(),juce::dontSendNotification);
+        trim.onValueChange=[this]{runtime.io.input.setTrimDb(float(trim.getValue()));};
+        addAndMakeVisible(trim);addAndMakeVisible(trimLabel);
+        trimLabel.setText("Input Trim",juce::dontSendNotification);
         lastGoodXml=preferences.deviceXml;
         presetFolder=juce::File(preferences.presetFolder);
         if(!presetFolder.isDirectory()) presetFolder=multi_effects::app::userPresetDirectory();
@@ -104,9 +109,9 @@ public:
         list.setBounds(15,82,265,220);up.setBounds(15,312,80,28);down.setBounds(100,312,80,28);remove.setBounds(185,312,95,28);
         types.setBounds(15,350,180,28);add.setBounds(200,350,80,28);
         bypass.setBounds(305,80,240,28);irLoad.setBounds(w-225,80,210,28);
-        for(std::size_t i=0;i<rows.size();++i)rows[i]->setBounds(305,112+int(i)*60,w-320,56);
+        for(std::size_t i=0;i<rows.size();++i){const int columns=rows.size()>4?2:1;const int width=(w-330)/columns;rows[i]->setBounds(305+int(i/4)*width,112+int(i%4)*60,width-10,56);}
         irStatus.setBounds(305,352,w-320,28);
-        deviceWarning.setBounds(15,382,w-30,24);devices.setBounds(15,410,w-30,h-545);
+        deviceWarning.setBounds(15,382,w-370,24);trimLabel.setBounds(w-345,382,85,24);trim.setBounds(w-260,382,245,24);devices.setBounds(15,410,w-30,h-545);
         inputSelector.setBounds(15,h-125,265,28);stereoInput.setBounds(290,h-125,170,28);audioStatus.setBounds(465,h-125,w-480,28);
         latencyStatus.setBounds(15,h-94,w-30,25);levels.setBounds(15,h-66,w-30,25);status.setBounds(15,h-36,w-30,30);
     }
@@ -229,6 +234,7 @@ private:
     }
     void persist()
     {
+        settings.getUserSettings()->setValue("inputTrimDb",runtime.io.input.trimDb());
         preferences.stereo=runtime.io.stereoInput.load();preferences.input=runtime.preferredInput.load();preferences.lastPreset=session.file==juce::File()?juce::String():session.file.getFullPathName();preferences.presetFolder=presetFolder.getFullPathName();preferences.deviceXml=lastGoodXml;preferences.write(*settings.getUserSettings());
     }
     void markAudioInitialising(bool active)
@@ -284,8 +290,8 @@ private:
         latencyStatus.setText("DSP latency: "+juce::String(int(latency))+" samples / "+juce::String(rate>0?1000.0*latency/rate:0,2)+" ms | "+modes,juce::dontSendNotification);
         const auto in=runtime.io.inputLevel.consume(),out=runtime.io.outputLevel.consume();inputClipTicks=in.clipped?20:std::max(0,inputClipTicks-1);outputClipTicks=out.clipped?20:std::max(0,outputClipTicks-1);
         const auto level=[](float p){return p>0?juce::String(20*std::log10(p),1)+" dBFS":juce::String("-inf dBFS");};
-        levels.setText("Input "+level(in.peak)+(inputClipTicks?" [CLIP]":"")+"    Output "+level(out.peak)+(outputClipTicks?" [CLIP]":"")+(in.invalid||out.invalid?" [INVALID SAMPLE]":""),juce::dontSendNotification);
-        title.setText(juce::String(multi_effects::product::name)+" "+multi_effects::product::version+" "+multi_effects::product::stage+" | CPU "+juce::String(manager.getCpuUsage()*100,1)+"% | blocks "+juce::String(blocks),juce::dontSendNotification);
+        levels.setText("Input "+level(in.peak)+(inputClipTicks?" [CLIP]":"")+ " | "+ui::inputReading(runtime.io.input)+" | Output "+level(out.peak)+(outputClipTicks?" [CLIP]":"")+(in.invalid||out.invalid?" [INVALID SAMPLE]":""),juce::dontSendNotification);
+        title.setText(juce::String(multi_effects::product::displayTitle)+" | CPU "+juce::String(manager.getCpuUsage()*100,1)+"% | blocks "+juce::String(blocks),juce::dontSendNotification);
         presetTitle.setText("Preset: "+session.title(),juce::dontSendNotification);
         if(++settingsTicks>=10){settingsTicks=0;if(active){settings.getUserSettings()->setValue("audioInitialising",false);if(auto xml=manager.createStateXml())lastGoodXml=xml->toString();rollbackAttempted=false;lastError.clear();}persist();}
     }
@@ -295,6 +301,7 @@ private:
     juce::ApplicationProperties settings;multi_effects::app::Preferences preferences;multi_effects::app::PresetSession session;
     juce::File presetFolder;std::vector<multi_effects::app::PresetEntry> presetFiles;
     juce::TextButton up{"Up"},down{"Down"},remove{"Remove..."},add{"Add"},save{"Save"},saveAs{"Save As..."},load{"Open preset..."},loadSelected{"Load selected"},irLoad{"Load cabinet IR..."},reconnect{"Reconnect audio"};
+    ui::InputTrimSlider trim;juce::Label trimLabel;
     juce::ToggleButton stereoInput{"Stereo input pair"};
     juce::ToggleButton mute{"Mute DSP"},bypass{"Bypass selected effect"};
     juce::ComboBox types,inputSelector,presetList;juce::StringArray inputNames;

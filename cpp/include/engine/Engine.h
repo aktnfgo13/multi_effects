@@ -33,6 +33,10 @@ public:
     virtual void process(float*, std::size_t) noexcept = 0;
     // Distinct, writable planar buffers. prepare({rate, block, 2}) before use.
     virtual void processStereo(float* left, float* right, std::size_t frames) noexcept = 0;
+    // Audio-thread only; negative until a Custom Drive lane has processed audio.
+    virtual float appliedGrain() const noexcept { return -1.f; }
+    virtual float appliedMix() const noexcept { return -1.f; }
+    virtual float appliedHeadroom() const noexcept { return -1.f; }
     virtual StereoPolicy stereoPolicy() const noexcept { return StereoPolicy::DualMono; }
     std::string id, type, name;
     std::vector<std::unique_ptr<Parameter>> parameters;

@@ -16,7 +16,13 @@ add_executable(test_plugin ../tests/test_plugin.cpp)
 target_link_libraries(test_plugin PRIVATE MultiEffectsPlugin multi_effects_dsp juce::juce_audio_utils juce::juce_gui_extra)
 add_test(NAME PluginLifecycleState COMMAND test_plugin)
 add_test(NAME PluginConcurrentControls COMMAND test_plugin controls)
+add_test(NAME PluginInputSystem COMMAND test_plugin input)
 add_test(NAME PluginAlphaUX COMMAND test_plugin alpha)
+add_test(NAME CustomDriveRealtimePropagation COMMAND test_plugin drive-propagation)
 if(CMAKE_CXX_FLAGS MATCHES "fsanitize")
     target_compile_definitions(test_plugin PRIVATE MULTI_EFFECTS_TEST_SANITIZER=1)
 endif()
+
+# Explicit integration probe requires the matching AU installed in this macOS account.
+add_executable(test_installed_au_grain EXCLUDE_FROM_ALL ../tests/test_installed_au_grain.cpp)
+target_link_libraries(test_installed_au_grain PRIVATE multi_effects_dsp "-framework AudioToolbox" "-framework CoreFoundation")

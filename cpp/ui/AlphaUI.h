@@ -1,11 +1,28 @@
 #pragma once
 #include <juce_gui_extra/juce_gui_extra.h>
 #include "engine/Engine.h"
+#include "engine/InputSystem.h"
 namespace multi_effects::ui {
+class InputTrimSlider final : public juce::Slider {
+public:
+    InputTrimSlider() {
+        setName("Input Trim");
+        setRange(-InputReference::trimLimitDb,InputReference::trimLimitDb,.1);
+        setTextValueSuffix(" dB");setTextBoxStyle(TextBoxRight,false,76,24);
+        setDoubleClickReturnValue(true,0.);
+    }
+};
+inline juce::String inputReading(InputSystem& stage) {
+    const float peak=stage.peak.load(),rms=stage.rms.load();
+    const auto db=[](float x){return x>0?juce::String(20*std::log10(x),1):juce::String("-inf");};
+    const bool clip=stage.clipped.exchange(false),invalid=stage.invalid.exchange(false);
+    return "DSP input "+db(peak)+" peak / "+db(rms)+" RMS dBFS"
+        +(invalid?" INVALID":clip?" CLIP":peak>=InputReference::hotPeak?" HOT":"");
+}
 inline juce::String parameterText(const ParameterInfo& p,double value) {
     if(p.requiresPrepare)return juce::String(1<<juce::jlimit(0,2,int(std::lround(value))))+"x";
     const bool percent=p.unit.empty()&&p.minimum==0&&p.maximum<=1;
-    const int decimals=percent||p.unit=="ms"?0:p.unit=="dB"||p.unit==":1"?1:2;
+    const int decimals=percent||p.unit=="ms"||p.unit=="%"?0:p.unit=="dB"||p.unit==":1"?1:2;
     return juce::String(percent?value*100:value,decimals)+(percent?" %":p.unit.empty()?"":" "+juce::String(p.unit));
 }
 inline juce::String effectText(const Effect& e,int row) {

@@ -44,6 +44,10 @@ public:
     void serviceConfiguration();
     void refreshLatency();
     juce::AudioProcessorValueTreeState parameters;
+    std::atomic<float> grainReadback{-1.f}; // Last rendered host-controlled instance.
+    std::atomic<float> mixReadback{-1.f};
+    std::atomic<float> headroomReadback{-1.f}; // Last rendered host-controlled instance.
+    InputSystem input;
     LevelMeter inputLevel,outputLevel;
     std::atomic<unsigned> appliedRevision{0};
 private:
@@ -51,6 +55,7 @@ private:
     struct Binding { Parameter* parameter=nullptr; Effect* effect=nullptr; };
     struct RenderState {
         Chain chain;
+        Effect* hostDrive=nullptr;
         std::vector<Binding> bindings;
         std::vector<float> dryL,dryR;
         std::array<float,3072> historyL{},historyR{}; // 24 effects * maximum 128 frames.
@@ -66,6 +71,7 @@ private:
     void handleAsyncUpdate() override { refreshLatency(); }
     void runWorker();
     std::vector<Mapping> mappings;
+    std::atomic<float>* hostTrim=nullptr;
     std::atomic<float>* globalBypass=nullptr;
     std::mutex control; // Never acquired in processBlock.
     Chain model;
