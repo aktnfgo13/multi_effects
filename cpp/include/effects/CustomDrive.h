@@ -6,25 +6,26 @@ namespace multi_effects {
 // fixed state; Engine copies a freshly prepared instance for independent stereo.
 class CustomDrive {
 public:
-    struct Controls { float drive=50,tone=50,crunch=50,headroom=50,grain=25,level=-6,mix=1; };
+    struct Controls { float drive=50,tone=50,crunch=50,headroom=50,grain=25,level=-6,mix=1,tight=50; };
     void prepare(double rate,int factor) {
         if(!std::isfinite(rate)||rate<8000||rate>192000)throw std::invalid_argument("CustomDrive sample rate");
         os.prepare(factor);sr=rate;highRate=rate*factor;rampSamples=std::max(1,int(std::round(rate*.020)));
         preSplit.prepare(rate,1400);postSplit.prepare(rate,1800);postLow.prepare(rate,std::min(10000.,rate*.42));
-        dc.prepare(rate,12);inputLow.prepare(rate,70);
+        tightBand.prepare(rate,220);dc.prepare(rate,12);inputLow.prepare(rate,70);
         memoryA=coefficient(highRate,.008);textureA=coefficient(highRate,.025);
         interA=float(std::exp(-6.283185307179586*std::min(11000.,rate*.42)/highRate));
         feedback.prepare(highRate);cached=false;reset();
     }
     void reset() noexcept {
         mixInitialized=false; remaining=0;
-        os.reset();dry.reset(os.latencySamples());inputLow.reset();preSplit.reset();postSplit.reset();postLow.reset();dc.reset();
+        os.reset();dry.reset(os.latencySamples());inputLow.reset();tightBand.reset();preSplit.reset();postSplit.reset();postLow.reset();dc.reset();
         feedback.reset();envelope=memory=texture=interState=0;
     }
     // Last validated controls used by update() on this audio lane.
     float appliedGrain() const noexcept { return cached ? last.grain : -1.f; }
     float appliedHeadroom() const noexcept { return cached ? last.headroom : -1.f; }
     float appliedMix() const noexcept { return mixInitialized ? mix : -1.f; }
+    float appliedTight() const noexcept { return cached ? last.tight : -1.f; }
     int latencySamples() const noexcept {return os.latencySamples();}
     float processSample(float input,const Controls& controls) noexcept {
         update(controls);
@@ -33,6 +34,9 @@ public:
         const float aligned=dry.process(std::isfinite(input) ? input : 0.f);
         float wet=x-inputLow.process(x);
         const float low=preSplit.process(wet);wet=low+preEmphasis*(wet-low);
+        // Fixed 220 Hz low shelf before both the saturation and sag detector.
+        const float excitationLF = tightBand.process(wet);
+        wet += tightDelta * excitationLF;
         wet=os.processSample(wet*driveGain,[this](float v){return island(v);});
         const float bass=postSplit.process(wet);wet=postLow.process(bass+postTilt*(wet-bass));
         wet-=dc.process(wet);wet*=outputGain;
@@ -48,7 +52,7 @@ private:
         void prepare(double rate,double hz){a=std::exp(-6.283185307179586*hz/rate);state=0;}
         void reset(){state=0;}
         float process(float x){state=x+a*(state-x);return float(state);}
-    } inputLow,preSplit,postSplit,postLow,dc;
+    } tightBand,inputLow,preSplit,postSplit,postLow,dc;
     static float coefficient(double rate,double seconds){return float(std::exp(-1/(rate*seconds)));}
     // Odd smooth knees with unity small-signal slope and unit rails.
     // Crunch blends rounded p=2 and firm p=8, plus serial-stage contribution.
@@ -93,7 +97,7 @@ private:
     }
     void update(const Controls& c) noexcept {
         const auto finite=[](float v,float fallback,float lo,float hi){return std::isfinite(v)?std::clamp(v,lo,hi):fallback;};
-        const Controls next{finite(c.drive,50,0,100),finite(c.tone,50,0,100),finite(c.crunch,50,0,100),finite(c.headroom,50,0,100),finite(c.grain,25,0,100),finite(c.level,-6,-24,12),finite(c.mix,1,0,1)};
+        const Controls next{finite(c.drive,50,0,100),finite(c.tone,50,0,100),finite(c.crunch,50,0,100),finite(c.headroom,50,0,100),finite(c.grain,25,0,100),finite(c.level,-6,-24,12),finite(c.mix,1,0,1),finite(c.tight,50,0,100)};
         if(!cached||next.drive!=last.drive||next.tone!=last.tone||next.headroom!=last.headroom||next.level!=last.level||next.grain!=last.grain||next.crunch!=last.crunch){
             const float d=next.drive*.01f,t=(next.tone-50)/50;
             driveGain=std::pow(10.f,(-6+42*d)/20);stageBGain=1+.6f*d;
@@ -122,6 +126,10 @@ private:
             const float kneeTrim=1-.68f*next.crunch*.01f;
             outputGain*=1+kneeTrim*(.16f*fine+.57f*coarse*coarse);
         }
+        if (!cached || next.tight != last.tight) {
+            const float gainRoot = 1.f + (50.f - next.tight) * .01f;
+            tightDelta = gainRoot * gainRoot - 1.f;
+        }
         hardness=next.crunch*.01f;
         if (!mixInitialized) {
             mix=next.mix;
@@ -134,7 +142,7 @@ private:
         last=next;cached=true;
     }
     int rampSamples=1,remaining=0;
-    float step=0;
+    float step=0, tightDelta=0;
     bool mixInitialized=false;
     Oversampler os;SampleDelay dry;Controls last;bool cached=false;
     double sr=48000,highRate=48000;

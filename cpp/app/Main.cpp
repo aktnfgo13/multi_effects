@@ -109,7 +109,7 @@ public:
         list.setBounds(15,82,265,220);up.setBounds(15,312,80,28);down.setBounds(100,312,80,28);remove.setBounds(185,312,95,28);
         types.setBounds(15,350,180,28);add.setBounds(200,350,80,28);
         bypass.setBounds(305,80,240,28);irLoad.setBounds(w-225,80,210,28);
-        for(std::size_t i=0;i<rows.size();++i){const int columns=rows.size()>4?2:1;const int width=(w-330)/columns;rows[i]->setBounds(305+int(i/4)*width,112+int(i%4)*60,width-10,56);}
+        for(std::size_t i=0;i<rows.size();++i){const int columns=std::max(1,int((rows.size()+3)/4));const int width=(w-330)/columns;rows[i]->setBounds(305+int(i/4)*width,112+int(i%4)*60,width-10,56);}
         irStatus.setBounds(305,352,w-320,28);
         deviceWarning.setBounds(15,382,w-370,24);trimLabel.setBounds(w-345,382,85,24);trim.setBounds(w-260,382,245,24);devices.setBounds(15,410,w-30,h-545);
         inputSelector.setBounds(15,h-125,265,28);stereoInput.setBounds(290,h-125,170,28);audioStatus.setBounds(465,h-125,w-480,28);

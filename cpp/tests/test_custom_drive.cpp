@@ -43,7 +43,7 @@ int main(int argc,char**){try{
         whole->reset();a.assign(a.size(),0);b=a;for(std::size_t i=0;i<a.size();++i)a[i]=testSignal(i,rate);whole->processStereo(a.data(),b.data(),a.size());require(a==l,"reset reproducibility");
         auto dry=make();dry->parameter("mix")->set(0);dry->reset();a.assign(a.size(),0);b=a;a[0]=.5f;dry->processStereo(a.data(),b.data(),a.size());require(a[mode?64:0]==.5f,"dry alignment");
         a[0]=std::numeric_limits<float>::quiet_NaN();a[1]=std::numeric_limits<float>::infinity();a[2]=std::numeric_limits<float>::max();whole->processStereo(a.data(),b.data(),a.size());for(float v:a)require(std::isfinite(v),"overload recovery");
-        for(int i=0;i<250;++i){whole->parameter("drive")->set(float(i%101));whole->parameter("headroom")->set(float((i*7)%101));whole->parameter("crunch")->set(float((i*3)%101));a.assign(512,.5f);b.assign(512,-.2f);allocation_tracker::ProcessScope scope;whole->processStereo(a.data(),b.data(),512);for(float v:a)require(std::isfinite(v),"dynamic stability");}
+        for(int i=0;i<250;++i){whole->parameter("tight")->set(float(i%101));whole->parameter("drive")->set(float(i%101));whole->parameter("headroom")->set(float((i*7)%101));whole->parameter("crunch")->set(float((i*3)%101));a.assign(512,.5f);b.assign(512,-.2f);allocation_tracker::ProcessScope scope;whole->processStereo(a.data(),b.data(),512);for(float v:a)require(std::isfinite(v),"dynamic stability");}
     }
     // Tuning guards at the hardware baseline only. Every macro corner must remain
     // finite and settle to silence, including the brightest/hardest combination.

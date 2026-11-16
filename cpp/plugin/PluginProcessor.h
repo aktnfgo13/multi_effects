@@ -45,6 +45,7 @@ public:
     void refreshLatency();
     juce::AudioProcessorValueTreeState parameters;
     std::atomic<float> grainReadback{-1.f}; // Last rendered host-controlled instance.
+    std::atomic<float> tightReadback{-1.f};
     std::atomic<float> mixReadback{-1.f};
     std::atomic<float> headroomReadback{-1.f}; // Last rendered host-controlled instance.
     InputSystem input;

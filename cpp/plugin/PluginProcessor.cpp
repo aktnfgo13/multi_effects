@@ -10,7 +10,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout Processor::layout() {
         const auto prefix=juce::String(d.type)+".";
         result.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID{prefix+"bypass",1},juce::String(d.name)+" bypass",false));
         for(const auto& p:d.parameters) {
-            const auto id=juce::ParameterID{prefix+juce::String(p.id),1};
+            const auto id=juce::ParameterID{prefix+juce::String(p.id),p.id == "tight" ? 3 : 1};
             const auto name=juce::String(d.name)+" / "+juce::String(p.name);
             if(p.requiresPrepare)result.add(std::make_unique<juce::AudioParameterChoice>(id,name,juce::StringArray{"1x","2x","4x"},int(p.initial)));
             else result.add(std::make_unique<juce::AudioParameterFloat>(id,name,juce::NormalisableRange<float>(p.minimum,p.maximum),p.initial,juce::AudioParameterFloatAttributes().withLabel(juce::String(p.unit))));
@@ -63,6 +63,7 @@ void Processor::releaseResources() {
     input.reset();
     grainReadback.store(-1.f,std::memory_order_relaxed);
     mixReadback.store(-1.f,std::memory_order_relaxed);
+    tightReadback.store(-1.f,std::memory_order_relaxed);
     headroomReadback.store(-1.f,std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(control);prepared=false;delete pending.exchange(nullptr);delete retired.exchange(nullptr);delete active;active=nullptr;
 }
@@ -101,6 +102,7 @@ void Processor::render(juce::AudioBuffer<float>& b,bool forcedBypass) noexcept {
     }
     grainReadback.store(r.hostDrive?r.hostDrive->appliedGrain():-1.f,std::memory_order_relaxed);
     mixReadback.store(r.hostDrive?r.hostDrive->appliedMix():-1.f,std::memory_order_relaxed);
+    tightReadback.store(r.hostDrive?r.hostDrive->appliedTight():-1.f,std::memory_order_relaxed);
     headroomReadback.store(r.hostDrive?r.hostDrive->appliedHeadroom():-1.f,std::memory_order_relaxed);
     inputLevel.publish(inPeak,inPeak>=1,invalidIn);outputLevel.publish(outPeak,outPeak>=1,invalidOut);
 }

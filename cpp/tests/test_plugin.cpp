@@ -70,7 +70,7 @@ static void customDriveState(){
     require(p.install(std::move(chain),"Custom Drive test"),"custom install");set(p,"custom_drive.drive",75);set(p,"custom_drive.grain",66);set(p,"custom_drive.oversampling",2);
     p.prepareToPlay(48000,128);require(p.getLatencySamples()==192,"custom chain latency");
     auto editor=std::unique_ptr<juce::AudioProcessorEditor>(p.createEditor());int controls=0;for(auto* child:editor->getChildren())if(auto* row=dynamic_cast<ui::ParameterRow*>(child)){++controls;require(row->getRight()<=editor->getWidth()&&row->getBottom()<478,"custom panel bounds");}
-    require(controls==8,"custom selected controls");
+    require(controls==9,"custom selected controls");
     juce::MemoryBlock state;p.getStateInformation(state);Processor restored;restored.setStateInformation(state.getData(),int(state.getSize()));
     auto c=restored.snapshot();require(c.effects.front()->id=="custom-instance"&&c.effects.front()->parameter("grain")->target==66,"custom state IDs/parameter restore");
     restored.prepareToPlay(48000,128);
@@ -78,8 +78,10 @@ static void customDriveState(){
     require(restored.grainReadback.load()==66,"restored DSP grain");
     for(float value:{0.f,50.f,100.f}) {
         set(restored,"custom_drive.grain",value);
+        set(restored,"custom_drive.tight",value);
         for(int n=0;n<375;++n){probe.clear();pump(restored,probe);}
         require(std::abs(restored.grainReadback.load()-value)<.01f,"restored live DSP grain");
+        require(std::abs(restored.tightReadback.load()-value)<.01f,"restored live DSP Tight");
         std::cout<<"Plugin rendered Grain "<<value<<" -> "<<restored.grainReadback.load()<<'\n';
     }
     for(float h:{0.f,100.f}) {
