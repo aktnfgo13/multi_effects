@@ -24,7 +24,7 @@ Parameter* Effect::parameter(const std::string& key)
 struct CustomDriveLane {
     CustomDrive drive;
     float operator()(float x,const std::vector<float>& p) {
-        return drive.processSample(x,{p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7]});
+        return drive.processSample(x,{p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7],p[8],p[9],p[10]});
     }
 };
 class Builtin final : public Effect
@@ -107,6 +107,10 @@ public:
     float appliedTight() const noexcept override {
         const auto* lane=processor_.target<CustomDriveLane>();
         return lane ? lane->drive.appliedTight() : -1.f;
+    }
+    float appliedMidCharacter() const noexcept override {
+        const auto* lane=processor_.target<CustomDriveLane>();
+        return lane ? lane->drive.appliedMidCharacter() : -1.f;
     }
     float appliedMix() const noexcept override {
         const auto* lane=processor_.target<CustomDriveLane>();
@@ -194,8 +198,9 @@ const std::vector<EffectDefinition>& registry()
             [](double sr, const auto&) { Reverb r; r.prepare(sr); return [r = std::move(r)](float x, const auto& p) mutable { return r.processSample(x, p[0], p[1], p[2]); }; }},
         {"tremolo", "Tremolo", {{"rate_hz", "Rate", "Hz", .1f, 20, 4}, {"depth", "Depth", "", 0, 1, .5f}},
             [](double sr, const auto&) { Tremolo t; t.prepare(sr); return [t](float x, const auto& p) mutable { return t.processSample(x, p[0], p[1]); }; }},
-        {"custom_drive", "Custom Drive", {{"drive", "Drive", "%", 0, 100, 50}, {"tone", "Tone", "%", 0, 100, 50}, {"crunch", "Crunch", "%", 0, 100, 50}, {"headroom", "Headroom", "%", 0, 100, 50}, {"grain", "Grain", "%", 0, 100, 25}, {"level_db", "Level", "dB", -24, 12, -6}, {"mix", "Mix", "", 0, 1, 1, false}, {"tight", "Tight", "%", 0, 100, 50}, {"oversampling", "Oversampling", "0=1x 1=2x 2=4x", 0, 2, 1, false, true}},
-            [](double sr, const auto& initial) { CustomDrive d; d.prepare(sr,1 << int(initial[8])); return CustomDriveLane{std::move(d)}; }}
+        {"custom_drive", "Custom Drive", {{"drive", "Drive", "%", 0, 100, 50}, {"tone", "Tone", "%", 0, 100, 50}, {"crunch", "Crunch", "%", 0, 100, 50}, {"headroom", "Headroom", "%", 0, 100, 50}, {"grain", "Grain", "%", 0, 100, 25}, {"level_db", "Level", "dB", -24, 12, -6}, {"mix", "Mix", "", 0, 1, 1, false}, {"tight", "Tight", "%", 0, 100, 50}, {"mid_character", "Mid Character", "%", 0, 100, 50},
+            {"bias", "Bias", "%", 0, 100, 50}, {"symmetry", "Symmetry", "%", 0, 100, 50}, {"oversampling", "Oversampling", "0=1x 1=2x 2=4x", 0, 2, 1, false, true}},
+            [](double sr, const auto& initial) { CustomDrive d; d.prepare(sr,1 << int(initial.back())); return CustomDriveLane{std::move(d)}; }}
     };
     return definitions;
 }

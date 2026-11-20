@@ -24,8 +24,10 @@ public:
         preset.setBounds(12,40,485,26);trimLabel.setBounds(500,40,85,26);trim.setBounds(585,40,300,26);browser.setBounds(12,72,285,28);loadSelected.setBounds(305,72,85,28);
         load.setBounds(400,72,105,28);save.setBounds(515,72,80,28);saveAs.setBounds(605,72,105,28);
         list.setBounds(12,112,270,355);selection.setBounds(300,110,580,28);bypass.setBounds(300,142,260,26);
-        const int rowsPerColumn = rows.size() > 8 ? 5 : 4;
-        for(std::size_t i=0;i<rows.size();++i){const int width=rows.size()>4?290:580;rows[i]->setBounds(300+int(i/rowsPerColumn)*width,174+int(i%rowsPerColumn)*60,width-10,56);}
+        const int rowsPerColumn = rows.size() > 8 && rows.size() <= 10 ? 5 : 4;
+        const int columns = std::max(1, int((rows.size()+rowsPerColumn-1)/rowsPerColumn));
+        const int width = 580 / columns;
+        for(std::size_t i=0;i<rows.size();++i){rows[i]->setBounds(300+int(i/rowsPerColumn)*width,174+int(i%rowsPerColumn)*60,width-10,56);}
         irStatus.setBounds(12,478,675,28);ir.setBounds(700,478,185,28);
         meters.setBounds(12,508,875,42);status.setBounds(12,550,875,55);
     }
@@ -95,11 +97,12 @@ private:
         inClip=in.clipped?8:std::max(0,inClip-1);outClip=out.clipped?8:std::max(0,outClip-1);
         const auto db=[](float v){return v>0?juce::String(20*std::log10(v),1):juce::String("-inf");};
         const float grain=owner.grainReadback.load(std::memory_order_relaxed);
+        const float mid=owner.midReadback.load(std::memory_order_relaxed);
         const float tight=owner.tightReadback.load(std::memory_order_relaxed);
         const float mix=owner.mixReadback.load(std::memory_order_relaxed);
         const float headroom=owner.headroomReadback.load(std::memory_order_relaxed);
         const auto grainStatus=grain<0 ? juce::String("no rendered Custom Drive") : juce::String(grain,2);
-        meters.setText("Input "+db(in.peak)+" dBFS"+(inClip?" CLIP":"")+(in.invalid?" INVALID":"")+" | Output "+db(out.peak)+" dBFS"+(outClip?" CLIP":"")+" | Latency "+juce::String(owner.getLatencySamples())+" samples | Grain DSP: "+grainStatus+" | Headroom DSP: "+(headroom<0?juce::String("—"):juce::String(headroom,2))+" | Tight DSP: "+(tight<0?juce::String("—"):juce::String(tight,1))+" | Mix DSP: "+(mix<0?juce::String("—"):juce::String(mix*100,1)+"%"),juce::dontSendNotification);
+        meters.setText("Input "+db(in.peak)+" dBFS"+(inClip?" CLIP":"")+(in.invalid?" INVALID":"")+" | Output "+db(out.peak)+" dBFS"+(outClip?" CLIP":"")+" | Latency "+juce::String(owner.getLatencySamples())+" samples | Grain DSP: "+grainStatus+" | Headroom DSP: "+(headroom<0?juce::String("—"):juce::String(headroom,2))+" | Tight DSP: "+(tight<0?juce::String("—"):juce::String(tight,1))+" | Mid Character DSP: "+(mid<0?juce::String("—"):juce::String(mid,1))+" | Mix DSP: "+(mix<0?juce::String("—"):juce::String(mix*100,1)+"%"),juce::dontSendNotification);
         juce::String modes;for(const auto* type:{"distortion","amp_sim","custom_drive"})if(std::any_of(view.effects.begin(),view.effects.end(),[type](const auto& e){return e->type==type;}))modes+=juce::String(type)+" "+juce::String(1<<int(owner.parameters.getRawParameterValue(juce::String(type)+".oversampling")->load()))+"x  ";
         status.setText((globalBypass.getToggleState()?"BYPASS | ":"DSP enabled (host controls playback) | ")+modes+" | "+ui::inputReading(owner.input)+"\n"+(localError.isEmpty()?owner.statusText():localError+" | "+owner.statusText()),juce::dontSendNotification);
     }

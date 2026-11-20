@@ -1,6 +1,7 @@
 #include "AllocationTracker.h"
 #include "TestSupport.h"
 #include "effects/CustomDrive.h"
+#include <complex>
 #include <iostream>
 #include <thread>
 using namespace multi_effects;
@@ -25,6 +26,190 @@ static void checkMixRamp() {
         }
     }
 }
+
+namespace {
+constexpr int sampleRate = 48000;
+constexpr int tonePeriod = 120; // 400 Hz, coherent at the measurement rate.
+constexpr double radiansPerSample = 6.283185307179586 / tonePeriod;
+
+float probeTone(int sample) {
+    return .437f * float(std::sin(radiansPerSample * (sample % tonePeriod)));
+}
+
+struct AsymmetryMetrics {
+    float positivePeak = 0, negativePeak = 0;
+    double rms = 0, third = 0;
+    std::complex<double> second;
+};
+
+AsymmetryMetrics measureAsymmetry(int mode, float bias, float symmetry) {
+    auto effect = createEffect("custom_drive", "asymmetry");
+    auto* biasParameter = effect->parameter("bias");
+    auto* symmetryParameter = effect->parameter("symmetry");
+    require(biasParameter && symmetryParameter, "missing Bias / Symmetry controls");
+    require(biasParameter->target == 50 && symmetryParameter->target == 50, "legacy Bias / Symmetry defaults");
+    biasParameter->set(bias);
+    symmetryParameter->set(symmetry);
+    effect->parameter("drive")->set(70);
+    effect->parameter("oversampling")->set(float(mode));
+    effect->prepare({sampleRate, 128, 1});
+
+    constexpr int steadyEnd = sampleRate * 5 / 4;
+    std::vector<float> signal(sampleRate * 3 / 2);
+    for (int i = 0; i < steadyEnd; ++i) signal[i] = probeTone(i);
+    { allocation_tracker::ProcessScope scope; effect->process(signal.data(), signal.size()); }
+    require(effect->invalidSampleCount == 0, "Bias / Symmetry tripped the invalid-sample guard");
+
+    AsymmetryMetrics metrics;
+    std::array<double, tonePeriod> cycle{};
+    double sum = 0, energy = 0;
+    for (int i = sampleRate; i < steadyEnd; ++i) {
+        const float y = signal[i];
+        require(std::isfinite(y), "Bias / Symmetry produced non-finite audio");
+        metrics.positivePeak = std::max(metrics.positivePeak, y);
+        metrics.negativePeak = std::max(metrics.negativePeak, -y);
+        sum += y;
+        energy += double(y) * y;
+        cycle[i % tonePeriod] += y;
+    }
+    constexpr int steadySamples = steadyEnd - sampleRate;
+    metrics.rms = std::sqrt(energy / steadySamples);
+    require(std::abs(sum / steadySamples) < 1e-6, "Bias / Symmetry leaves steady DC");
+    require(metrics.positivePeak < 1 && metrics.negativePeak < 1, "Bias / Symmetry probe clips at digital full scale");
+    for (auto it = signal.end() - tonePeriod; it != signal.end(); ++it)
+        require(std::abs(*it) < 1e-5f, "Bias / Symmetry tail does not settle");
+
+    std::array<std::complex<double>, 3> harmonics{};
+    for (int h = 1; h <= 3; ++h)
+        for (int i = 0; i < tonePeriod; ++i)
+            harmonics[h - 1] += cycle[i] * std::polar(1., -h * radiansPerSample * i);
+    const double fundamental = std::abs(harmonics[0]);
+    require(fundamental > 0, "Bias / Symmetry probe has no fundamental");
+    // Refer harmonic phase to H1 so opposite-polarity H2 contributions stay distinguishable.
+    metrics.second = harmonics[1] * std::polar(1. / fundamental, -2 * std::arg(harmonics[0]));
+    metrics.third = std::abs(harmonics[2]) / fundamental;
+    return metrics;
+}
+
+void checkBiasAndSymmetry() {
+    for (int mode : {0, 1, 2}) {
+        const auto center = measureAsymmetry(mode, 50, 50);
+        const auto biasLow = measureAsymmetry(mode, 0, 50);
+        const auto biasHigh = measureAsymmetry(mode, 100, 50);
+        const auto symmetryLow = measureAsymmetry(mode, 50, 0);
+        const auto symmetryHigh = measureAsymmetry(mode, 50, 100);
+        require(biasHigh.positivePeak < biasLow.positivePeak && biasHigh.negativePeak > biasLow.negativePeak,
+                "increasing Bias must favor clipping on the positive half");
+        // DC blocking recenters the waveform, so compare the two output lobes relative to each other.
+        require(symmetryHigh.positivePeak / symmetryHigh.negativePeak >
+                symmetryLow.positivePeak / symmetryLow.negativePeak + .03f,
+                "increasing Symmetry must favor the positive output lobe");
+        require(std::abs(biasHigh.second - biasLow.second) > .02 &&
+                std::abs(symmetryHigh.second - symmetryLow.second) > .02, "Bias / Symmetry must change even content");
+        for (const auto& endpoint : {biasLow, biasHigh, symmetryLow, symmetryHigh}) {
+            require(endpoint.third > .02, "Bias / Symmetry must retain third-harmonic content");
+            require(endpoint.rms > center.rms / 1.4 && endpoint.rms < center.rms * 1.4,
+                    "Bias / Symmetry causes a large output-level shift on the reference tone");
+        }
+    }
+
+    // Compare a live endpoint change against the same signal through a held control.
+    for (const char* key : {"bias", "symmetry"}) {
+        auto changing = createEffect("custom_drive", "changing");
+        auto held = createEffect("custom_drive", "held");
+        for (auto* effect : {changing.get(), held.get()}) {
+            effect->parameter("drive")->set(70);
+            effect->prepare({sampleRate, 128, 1});
+        }
+        auto* control = changing->parameter(key);
+        constexpr int editAt = sampleRate / 2;
+        std::vector<float> before(editAt), after(sampleRate / 5);
+        for (int i = 0; i < editAt; ++i) before[i] = probeTone(i);
+        for (int i = 0; i < int(after.size()); ++i) after[i] = probeTone(editAt + i);
+        auto beforeHeld = before, afterHeld = after;
+        {
+            allocation_tracker::ProcessScope scope;
+            changing->process(before.data(), before.size());
+            held->process(beforeHeld.data(), beforeHeld.size());
+            control->set(100);
+            changing->process(after.data(), after.size());
+            held->process(afterHeld.data(), afterHeld.size());
+        }
+        require(before == beforeHeld, "live Bias / Symmetry references disagree before editing");
+        float previous = 0;
+        for (int i = 0; i < 128; ++i) {
+            const float residual = after[i] - afterHeld[i];
+            require(std::abs(residual - previous) < .003f, "Bias / Symmetry automation spike at edit");
+            previous = residual;
+        }
+        double deltaEnergy = 0, heldEnergy = 0;
+        for (auto i = after.size() - tonePeriod; i < after.size(); ++i) {
+            const double delta = after[i] - afterHeld[i];
+            deltaEnergy += delta * delta;
+            heldEnergy += double(afterHeld[i]) * afterHeld[i];
+        }
+        require(deltaEnergy > .0001 * heldEnergy, "Bias / Symmetry live edit must change output");
+    }
+}
+}
+
+static void checkHeadroomPickLoading() {
+    for (int mode : {0, 1, 2}) for (float drive : {25.f, 50.f, 75.f})
+        for (float headroom : {0.f, 50.f, 100.f}) {
+            const auto make = [&] {
+                auto e=createEffect("custom_drive","headroom-pick");
+                e->parameter("drive")->set(drive);
+                e->parameter("headroom")->set(headroom);
+                e->parameter("grain")->set(50);
+                e->parameter("oversampling")->set(float(mode));
+                e->prepare({48000,128,2});return e;
+            };
+            auto whole=make(),split=make();
+            std::vector<float> input(24000),left,right(input.size()),a,b(input.size());
+            for (int i=0;i<12000;++i) {
+                const float decay=std::exp(-float(i%2400)/500.f);
+                input[i]=.437f*decay*std::sin(float(i)*.0576f);
+            }
+            left=input;a=input;
+            {allocation_tracker::ProcessScope scope;whole->processStereo(left.data(),right.data(),left.size());}
+            for(std::size_t offset=0;offset<a.size();) {
+                const auto n=std::min<std::size_t>(offset%2?73:128,a.size()-offset);
+                {allocation_tracker::ProcessScope scope;split->processStereo(a.data()+offset,b.data()+offset,n);}
+                offset+=n;
+            }
+            require(a==left && b==right,"Headroom pick block partition");
+            for(float v:right)require(v==0,"Headroom pick stereo independence");
+            for(float v:left)require(std::isfinite(v),"Headroom pick finite output");
+            for(std::size_t i=left.size()-128;i<left.size();++i)
+                require(std::abs(left[i])<1e-5f,"Headroom pick recovers to silence / DC");
+            whole->reset();a=input;
+            {allocation_tracker::ProcessScope scope;whole->processStereo(a.data(),b.data(),a.size());}
+            require(a==left,"Headroom pick reset reproducibility");
+            // A host target jump must not produce a discontinuity at its boundary.
+            auto reference=make();whole=make();
+            std::array<float,128> warm{},control{},silent{};
+            for(int block=0;block<100;++block) {
+                for(int i=0;i<128;++i)warm[i]=.1f*std::sin(float(block*128+i)*.0576f);
+                control=warm;
+                whole->processStereo(warm.data(),silent.data(),128);
+                reference->processStereo(control.data(),silent.data(),128);
+            }
+            whole->parameter("headroom")->set(headroom==0?100:0);
+            for(int i=0;i<128;++i)warm[i]=.1f*std::sin(float(12800+i)*.0576f);
+            control=warm;
+            {allocation_tracker::ProcessScope scope;
+                whole->processStereo(warm.data(),silent.data(),128);
+                reference->processStereo(control.data(),silent.data(),128);}
+            require(std::abs(warm[0]-control[0])<.001f,"Headroom smoothed target boundary");
+            float previous=0;
+            for(int i=0;i<128;++i) {
+                const float residual=warm[i]-control[i];
+                require(std::abs(residual-previous)<.003f,"Headroom automation residual spike");
+                previous=residual;
+            }
+        }
+}
+
 int main(int argc,char**){try{
     checkMixRamp();
     if(argc>1){auto e=createEffect("custom_drive","threaded");e->prepare({48000,128,2});std::atomic<bool> done{false};
@@ -32,6 +217,8 @@ int main(int argc,char**){try{
         std::array<float,128> l{},r{};for(int n=0;n<4000||!done;++n){l.fill(.1f);r.fill(-.2f);allocation_tracker::ProcessScope scope;e->processStereo(l.data(),r.data(),128);}writer.join();
         require(allocation_tracker::processAllocations==0&&allocation_tracker::processFrees==0,"concurrent allocation");return 0;}
 
+    checkBiasAndSymmetry();
+    checkHeadroomPickLoading();
     for(double rate:{44100.,48000.,96000.})for(int mode:{0,1,2}){
         const auto make=[&]{auto e=createEffect("custom_drive","drive");e->parameter("oversampling")->set(float(mode));e->parameter("drive")->set(100);e->parameter("grain")->set(100);e->prepare({rate,128,2});return e;};
         auto whole=make(),split=make();require(whole->latencySamples()==std::size_t(mode?64:0),"latency");
@@ -43,7 +230,7 @@ int main(int argc,char**){try{
         whole->reset();a.assign(a.size(),0);b=a;for(std::size_t i=0;i<a.size();++i)a[i]=testSignal(i,rate);whole->processStereo(a.data(),b.data(),a.size());require(a==l,"reset reproducibility");
         auto dry=make();dry->parameter("mix")->set(0);dry->reset();a.assign(a.size(),0);b=a;a[0]=.5f;dry->processStereo(a.data(),b.data(),a.size());require(a[mode?64:0]==.5f,"dry alignment");
         a[0]=std::numeric_limits<float>::quiet_NaN();a[1]=std::numeric_limits<float>::infinity();a[2]=std::numeric_limits<float>::max();whole->processStereo(a.data(),b.data(),a.size());for(float v:a)require(std::isfinite(v),"overload recovery");
-        for(int i=0;i<250;++i){whole->parameter("tight")->set(float(i%101));whole->parameter("drive")->set(float(i%101));whole->parameter("headroom")->set(float((i*7)%101));whole->parameter("crunch")->set(float((i*3)%101));a.assign(512,.5f);b.assign(512,-.2f);allocation_tracker::ProcessScope scope;whole->processStereo(a.data(),b.data(),512);for(float v:a)require(std::isfinite(v),"dynamic stability");}
+        for(int i=0;i<250;++i){whole->parameter("mid_character")->set(float((i*11)%101));whole->parameter("tight")->set(float(i%101));whole->parameter("drive")->set(float(i%101));whole->parameter("headroom")->set(float((i*7)%101));whole->parameter("crunch")->set(float((i*3)%101));a.assign(512,.5f);b.assign(512,-.2f);allocation_tracker::ProcessScope scope;whole->processStereo(a.data(),b.data(),512);for(float v:a)require(std::isfinite(v),"dynamic stability");}
     }
     // Tuning guards at the hardware baseline only. Every macro corner must remain
     // finite and settle to silence, including the brightest/hardest combination.

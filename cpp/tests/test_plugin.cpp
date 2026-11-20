@@ -31,6 +31,17 @@ static void inputTrim() {
     require(restored.parameters.getRawParameterValue("input.trim")->load()==0,"legacy state unity");
     set(p,"plugin.bypass",1);for(int i=0;i<40;++i){fill();pump(p,b);}
     require(b.getSample(0,959)==.25f,"raw global bypass");
+    // Plugin output is floating point, not a hardware endpoint. Preserve hot
+    // samples for host gain staging, while flagging the final-output risk.
+    set(p,"plugin.bypass",0);set(p,"input.trim",0);
+    const float hot=std::pow(10.f,3.26f/20.f);
+    for(int block=0;block<40;++block) {
+        for(int i=0;i<960;++i)b.setSample(0,i,hot);
+        pump(p,b);
+    }
+    require(std::abs(b.getSample(0,959)-hot)<1e-6f,"plugin float headroom must not hard clip");
+    const auto meter=p.outputLevel.consume();
+    require(meter.clipped && meter.peak>=hot && !meter.invalid,"hot plugin output must flag CLIP");
 }
 static void matrix(){
     for(double rate:{44100.,48000.,96000.})for(int inputs:{1,2})for(int mode:{0,1,2}) {
@@ -67,20 +78,34 @@ static void automation(){
 }
 static void customDriveState(){
     Processor p;auto chain=p.snapshot();chain.effects.insert(chain.effects.begin(),createEffect("custom_drive","custom-instance"));
-    require(p.install(std::move(chain),"Custom Drive test"),"custom install");set(p,"custom_drive.drive",75);set(p,"custom_drive.grain",66);set(p,"custom_drive.oversampling",2);
+    require(p.install(std::move(chain),"Custom Drive test"),"custom install");set(p,"custom_drive.drive",75);set(p,"custom_drive.headroom",37);set(p,"custom_drive.grain",66);set(p,"custom_drive.oversampling",2);
+    set(p,"custom_drive.bias",24);
+    set(p,"custom_drive.symmetry",81);
     p.prepareToPlay(48000,128);require(p.getLatencySamples()==192,"custom chain latency");
-    auto editor=std::unique_ptr<juce::AudioProcessorEditor>(p.createEditor());int controls=0;for(auto* child:editor->getChildren())if(auto* row=dynamic_cast<ui::ParameterRow*>(child)){++controls;require(row->getRight()<=editor->getWidth()&&row->getBottom()<478,"custom panel bounds");}
-    require(controls==9,"custom selected controls");
+    auto editor=std::unique_ptr<juce::AudioProcessorEditor>(p.createEditor());
+    std::vector<juce::Rectangle<int>> controlBounds;
+    for(auto* child:editor->getChildren())if(auto* row=dynamic_cast<ui::ParameterRow*>(child)) {
+        const auto bounds=row->getBounds();
+        require(editor->getLocalBounds().contains(bounds)&&bounds.getBottom()<478,"custom panel bounds");
+        for(const auto& other:controlBounds)require(!bounds.intersects(other),"custom panel row overlap");
+        controlBounds.push_back(bounds);
+    }
+    require(controlBounds.size()==12,"custom selected controls");
     juce::MemoryBlock state;p.getStateInformation(state);Processor restored;restored.setStateInformation(state.getData(),int(state.getSize()));
     auto c=restored.snapshot();require(c.effects.front()->id=="custom-instance"&&c.effects.front()->parameter("grain")->target==66,"custom state IDs/parameter restore");
+    require(std::abs(c.effects.front()->parameter("bias")->target.load()-24.f)<.001f,"custom Bias state restore");
+    require(std::abs(c.effects.front()->parameter("symmetry")->target.load()-81.f)<.001f,"custom Symmetry state restore");
     restored.prepareToPlay(48000,128);
     juce::AudioBuffer<float> probe(2,128);probe.clear();pump(restored,probe);
+    require(restored.headroomReadback.load()==37,"restored DSP headroom");
     require(restored.grainReadback.load()==66,"restored DSP grain");
     for(float value:{0.f,50.f,100.f}) {
         set(restored,"custom_drive.grain",value);
         set(restored,"custom_drive.tight",value);
+        set(restored,"custom_drive.mid_character",value);
         for(int n=0;n<375;++n){probe.clear();pump(restored,probe);}
         require(std::abs(restored.grainReadback.load()-value)<.01f,"restored live DSP grain");
+        require(std::abs(restored.midReadback.load()-value)<.01f,"restored live DSP Mid Character");
         require(std::abs(restored.tightReadback.load()-value)<.01f,"restored live DSP Tight");
         std::cout<<"Plugin rendered Grain "<<value<<" -> "<<restored.grainReadback.load()<<'\n';
     }
@@ -90,6 +115,17 @@ static void customDriveState(){
         require(std::abs(restored.headroomReadback.load()-h)<.01f,"restored live DSP headroom");
     }
     auto preset=app::deserializePreset(app::serializePreset(c));require(preset.effects.front()->type=="custom_drive","custom preset schema");
+    auto legacyState=juce::JSON::parse(juce::String::fromUTF8(static_cast<const char*>(state.getData()),int(state.getSize())));
+    auto* savedEffects=legacyState["preset"]["effects"].getArray();
+    require(savedEffects&&!savedEffects->isEmpty(),"saved Custom Drive chain");
+    auto* savedParameters=(*savedEffects)[0]["parameters"].getDynamicObject();
+    require(savedParameters!=nullptr,"saved Custom Drive parameters");
+    savedParameters->removeProperty("bias");
+    savedParameters->removeProperty("symmetry");
+    const auto legacy=juce::JSON::toString(legacyState);
+    restored.setStateInformation(legacy.toRawUTF8(),int(legacy.getNumBytesAsUTF8()));
+    require(restored.parameters.getRawParameterValue("custom_drive.bias")->load()==50.f,"legacy Bias default");
+    require(restored.parameters.getRawParameterValue("custom_drive.symmetry")->load()==50.f,"legacy Symmetry default");
     juce::AudioBuffer<float> b(2,128);for(int k=0;k<1000;++k){set(p,"custom_drive.drive",float(k%101));b.clear();pump(p,b);}
 }
 static void concurrent(){Processor p;p.prepareToPlay(48000,128);std::atomic<bool> done{false};std::thread writer([&]{for(int i=0;i<100;++i){set(p,"gain.gain_db",float(i%12));set(p,"distortion.oversampling",float(i%3));juce::MemoryBlock data;p.getStateInformation(data);}done=true;});juce::AudioBuffer<float> b(2,128);for(int k=0;k<3000||!done;++k){b.clear();pump(p,b);}writer.join();}
@@ -126,7 +162,7 @@ static void profile(){
 }
 // Same live Runtime objects used by Standalone: never reset/rebuild on edits.
 static void customDriveRealtime() {
-    for(int mode:{0,1,2})for(const char* key:{"drive","tone","crunch","headroom","grain"}) {
+    for(int mode:{0,1,2})for(const char* key:{"drive","tone","crunch","headroom","grain","bias","symmetry"}) {
         app::Runtime live,held;
         const auto setup=[&](app::Runtime& r){r.chain.effects.push_back(createEffect("custom_drive","live-drive"));
             r.chain.effects.front()->parameter(key)->set(0);r.chain.effects.front()->parameter("oversampling")->set(float(mode));
@@ -158,7 +194,7 @@ static void customDriveRealtime() {
         std::cout<<"Standalone "<<key<<" "<<(1<<mode)<<"x waveform delta/ref RMS L="<<relativeL<<" R="<<relativeR<<'\n';
     }
     // Actual PluginEditor bindings, not a stand-in for host/GUI propagation.
-    for(const char* key:{"drive","tone","crunch","headroom","grain"}) {
+    for(const char* key:{"drive","tone","crunch","headroom","grain","bias","symmetry"}) {
         Processor live,held;
         const auto setup=[&](Processor& p){Chain c;c.effects.push_back(createEffect("custom_drive","plugin-drive"));c.effects.front()->parameter(key)->set(0);require(p.install(std::move(c),"Propagation"),"plugin install");p.prepareToPlay(48000,128);};
         setup(live);setup(held);auto editor=std::unique_ptr<juce::AudioProcessorEditor>(live.createEditor());
@@ -170,6 +206,7 @@ static void customDriveRealtime() {
             pump(live,a);pump(held,b);
             for(int i=0;i<128;++i){require(a.getSample(1,i)==0,"live stereo leakage");if(block>=1000){delta+=std::pow(a.getSample(0,i)-b.getSample(0,i),2);energy+=std::pow(b.getSample(0,i),2);}}
         }
+        require(live.parameters.getRawParameterValue(juce::String("custom_drive.")+key)->load()==100.f,"plugin editor did not update host value");
         require(std::sqrt(delta/energy)>.01,"plugin editor failed to change output");
         std::cout<<"Plugin "<<key<<" waveform delta/ref RMS="<<std::sqrt(delta/energy)<<'\n';
     }
