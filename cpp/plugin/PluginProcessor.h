@@ -49,6 +49,7 @@ public:
     std::atomic<float> tightReadback{-1.f};
     std::atomic<float> mixReadback{-1.f};
     std::atomic<float> headroomReadback{-1.f}; // Last rendered host-controlled instance.
+    AnalysisTap analysis;
     InputSystem input;
     LevelMeter inputLevel,outputLevel;
     std::atomic<unsigned> appliedRevision{0};

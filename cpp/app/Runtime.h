@@ -9,6 +9,8 @@ namespace multi_effects::app
 class Runtime
 {
 public:
+    AnalysisTap analysis;
+    Runtime(){analysis.prepare();chain.analysis=&analysis;}
     Chain chain;
     MonoAudioIO io;
     std::mutex control;
@@ -28,7 +30,7 @@ public:
             auto candidate=cloneConfiguration(chain);
             io.selectedInput=preferredInput.load();
             io.prepare(candidate,next,active);
-            chain.effects.swap(candidate.effects); spec=next; channels=std::move(active);
+            candidate.analysis=&analysis;chain=std::move(candidate); spec=next; channels=std::move(active);
             error.clear();ready=true;++generation;return true;
         }
         catch(const std::exception& e) {error=std::string("Prepare failed: ")+e.what();io.stop();return false;}
@@ -38,7 +40,7 @@ public:
     bool replace(Chain candidate)
     {
         std::lock_guard<std::mutex> lock(control);
-        try {candidate.prepare(spec);chain.effects.swap(candidate.effects);error.clear();++generation;return true;}
+        try {candidate.prepare(spec);candidate.analysis=&analysis;chain=std::move(candidate);error.clear();++generation;return true;}
         catch(const std::exception& e){error=std::string("Configuration rejected: ")+e.what();return false;}
     }
     void stop() noexcept {ready=false;io.stop();}

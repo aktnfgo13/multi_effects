@@ -209,10 +209,24 @@ std::unique_ptr<Effect> createEffect(const std::string& type, const std::string&
     for (const auto& d : registry()) if (d.type == type) { auto e = std::make_unique<Builtin>(d); e->id = id; return e; }
     throw std::invalid_argument("Unknown effect: " + type);
 }
-void Chain::prepare(ProcessSpec spec) { for (auto& e : effects) e->prepare(spec); }
-void Chain::reset() { for (auto& e : effects) e->reset(); }
-void Chain::process(float* samples, std::size_t count) noexcept { for (auto& e : effects) e->process(samples, count); }
-void Chain::processStereo(float* left, float* right, std::size_t frames) noexcept { for (auto& e : effects) e->processStereo(left, right, frames); }
+static unsigned nextAnalysisEpoch() { static std::atomic<unsigned> epoch{0};return ++epoch; }
+void Chain::prepare(ProcessSpec spec) { for (auto& e : effects) e->prepare(spec); analysisRate_=spec.sampleRate; analysisLatency_=0;for(const auto& e:effects)analysisLatency_+=unsigned(e->latencySamples());analysisEpoch_=nextAnalysisEpoch(); }
+void Chain::reset() { analysisLatency_=0;for (auto& e : effects) {e->reset();analysisLatency_+=unsigned(e->latencySamples());} analysisEpoch_=nextAnalysisEpoch(); }
+void Chain::process(float* samples, std::size_t count) noexcept { render(samples,nullptr,count); }
+void Chain::processStereo(float* left, float* right, std::size_t frames) noexcept { render(left,right,frames); }
+void Chain::render(float* left,float* right,std::size_t frames) noexcept {
+    if(!analysis || !analysis->isEnabled()) {
+        for(auto& e:effects) {if(right)e->processStereo(left,right,frames);else e->process(left,frames);}return;
+    }
+    std::array<float,AnalysisTap::blockSize> inL{},inR{};
+    for(std::size_t offset=0;offset<frames;) {
+        const auto n=unsigned(std::min<std::size_t>(AnalysisTap::blockSize,frames-offset));
+        auto* l=left+offset;auto* r=right?right+offset:nullptr;
+        std::copy_n(l,n,inL.data());if(r)std::copy_n(r,n,inR.data());
+        for(auto& e:effects){if(r)e->processStereo(l,r,n);else e->process(l,n);}
+        analysis->tryPush(inL.data(),r?inR.data():nullptr,l,r,n,analysisRate_,analysisLatency_,analysisEpoch_);offset+=n;
+    }
+}
 void Chain::move(std::size_t from, std::size_t to)
 {
     if (from >= effects.size() || to >= effects.size()) throw std::out_of_range("Effect index");

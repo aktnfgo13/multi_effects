@@ -26,3 +26,5 @@ endif()
 # Explicit integration probe requires the matching AU installed in this macOS account.
 add_executable(test_installed_au_grain EXCLUDE_FROM_ALL ../tests/test_installed_au_grain.cpp)
 target_link_libraries(test_installed_au_grain PRIVATE multi_effects_dsp "-framework AudioToolbox" "-framework CoreFoundation")
+
+add_test(NAME AnalysisPluginIntegration COMMAND test_plugin analysis)

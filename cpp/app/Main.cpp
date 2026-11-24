@@ -4,6 +4,7 @@
 #include "AppState.h"
 #include "PresetLibrary.h"
 #include "../ui/AlphaUI.h"
+#include "../ui/AnalysisPanel.h"
 #include "ProductInfo.h"
 using namespace multi_effects;
 
@@ -13,6 +14,8 @@ class MainComponent final : public juce::Component, private juce::AudioIODeviceC
 public:
     MainComponent() : list("Effects",this), devices(manager,0,256,0,256,false,false,true,false)
     {
+        addAndMakeVisible(showAnalysis);addChildComponent(analysisPanel);
+        showAnalysis.onClick=[this]{devices.setVisible(!showAnalysis.getToggleState());analysisPanel.setVisible(showAnalysis.getToggleState());};
         juce::PropertiesFile::Options options;
         options.applicationName="MultiEffectsStandalone";options.filenameSuffix="settings";
         options.folderName="Multi Effects";options.osxLibrarySubFolder="Application Support";
@@ -103,6 +106,8 @@ public:
     void resized() override
     {
         const int w=std::max(1050,getWidth()),h=std::max(820,getHeight());
+        analysisPanel.setBounds(15,410,w-30,h-545);
+        showAnalysis.setBounds(15,382,130,24);
         title.setBounds(15,7,w-370,28);reconnect.setBounds(w-350,7,150,28);mute.setBounds(w-190,7,175,28);
         presetTitle.setBounds(15,42,210,28);presetList.setBounds(235,42,w-755,28);
         loadSelected.setBounds(w-510,42,115,28);save.setBounds(w-385,42,70,28);saveAs.setBounds(w-305,42,95,28);load.setBounds(w-200,42,185,28);
@@ -111,7 +116,7 @@ public:
         bypass.setBounds(305,80,240,28);irLoad.setBounds(w-225,80,210,28);
         for(std::size_t i=0;i<rows.size();++i){const int columns=std::max(1,int((rows.size()+3)/4));const int width=(w-330)/columns;rows[i]->setBounds(305+int(i/4)*width,112+int(i%4)*60,width-10,56);}
         irStatus.setBounds(305,352,w-320,28);
-        deviceWarning.setBounds(15,382,w-370,24);trimLabel.setBounds(w-345,382,85,24);trim.setBounds(w-260,382,245,24);devices.setBounds(15,410,w-30,h-545);
+        deviceWarning.setBounds(150,382,w-505,24);trimLabel.setBounds(w-345,382,85,24);trim.setBounds(w-260,382,245,24);devices.setBounds(15,410,w-30,h-545);
         inputSelector.setBounds(15,h-125,265,28);stereoInput.setBounds(290,h-125,170,28);audioStatus.setBounds(465,h-125,w-480,28);
         latencyStatus.setBounds(15,h-94,w-30,25);levels.setBounds(15,h-66,w-30,25);status.setBounds(15,h-36,w-30,30);
     }
@@ -296,6 +301,8 @@ private:
         if(++settingsTicks>=10){settingsTicks=0;if(active){settings.getUserSettings()->setValue("audioInitialising",false);if(auto xml=manager.createStateXml())lastGoodXml=xml->toString();rollbackAttempted=false;lastError.clear();}persist();}
     }
     multi_effects::app::Runtime runtime;
+    ui::AnalysisPanel analysisPanel{runtime.analysis};
+    juce::ToggleButton showAnalysis{"Visualization"};
     juce::AudioDeviceManager manager;
     juce::ListBox list;juce::AudioDeviceSelectorComponent devices;juce::TooltipWindow tooltips{this,700};
     juce::ApplicationProperties settings;multi_effects::app::Preferences preferences;multi_effects::app::PresetSession session;

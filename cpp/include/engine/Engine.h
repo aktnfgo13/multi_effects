@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include "analysis/AnalysisTap.h"
 #include <functional>
 #include <memory>
 #include <string>
@@ -65,11 +66,16 @@ class Chain
 public:
     // Structural edits, prepare, reset and destruction require a stopped callback.
     std::vector<std::unique_ptr<Effect>> effects;
+    AnalysisTap* analysis = nullptr; // Non-owning; attach/detach only with callback stopped.
     void prepare(ProcessSpec spec);
     void reset();
     void process(float* samples, std::size_t count) noexcept;
     void processStereo(float* left, float* right, std::size_t frames) noexcept;
     void move(std::size_t from, std::size_t to);
+private:
+    void render(float*,float*,std::size_t) noexcept;
+    double analysisRate_=48000;
+    unsigned analysisLatency_=0,analysisEpoch_=0;
 };
 Chain cloneConfiguration(const Chain&); // Non-realtime snapshot; no DSP state copy.
 }

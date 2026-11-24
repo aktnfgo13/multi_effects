@@ -2,6 +2,7 @@
 #include "TestSupport.h"
 #include "../plugin/PluginProcessor.h"
 #include "../ui/AlphaUI.h"
+#include "../ui/AnalysisPanel.h"
 #include "../app/Runtime.h"
 #include <iostream>
 #include <chrono>
@@ -211,4 +212,43 @@ static void customDriveRealtime() {
         std::cout<<"Plugin "<<key<<" waveform delta/ref RMS="<<std::sqrt(delta/energy)<<'\n';
     }
 }
-int main(int argc,char** argv){juce::ScopedJuceInitialiser_GUI init;try{if(argc>1&&std::string(argv[1])=="profile"){profile();return 0;}if(argc>1&&std::string(argv[1])=="input")inputTrim();else if(argc>1&&std::string(argv[1])=="drive-propagation")customDriveRealtime();else if(argc>1&&std::string(argv[1])=="grain-state")customDriveState();else if(argc>1&&std::string(argv[1])=="alpha")alphaUX();else if(argc>1)concurrent();else{matrix();state();automation();customDriveState();}require(allocation_tracker::processAllocations==0&&allocation_tracker::processFrees==0,"plugin process allocated/freed");std::cout<<"Plugin lifecycle/state/stereo/automation/allocation PASS\n";}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}
+
+static void analysisIntegration() {
+    Processor reference,measured;
+    layout(reference,2);layout(measured,2);reference.prepareToPlay(48000,128);measured.prepareToPlay(48000,128);
+    measured.analysis.setEnabled(true);
+    juce::AudioBuffer<float> a(2,512),b(2,512);AnalysisTap::Packet packet;unsigned received=0;
+    for(int block=0;block<20;++block) {
+        for(int ch=0;ch<2;++ch)for(int i=0;i<512;++i)a.setSample(ch,i,testSignal(block*512+i+ch*123,48000));
+        b.makeCopyOf(a);pump(reference,a);pump(measured,b);
+        for(int ch=0;ch<2;++ch)for(int i=0;i<512;++i)require(a.getSample(ch,i)==b.getSample(ch,i),"plugin analysis output exact");
+        while(measured.analysis.tryRead(packet)){require(packet.channels==2&&packet.sampleRate==48000,"plugin tap metadata");++received;}
+    }
+    require(received>0,"plugin analysis delivered");measured.analysis.setEnabled(false);
+    for(int n=0;n<8;++n) {
+        std::unique_ptr<juce::AudioProcessorEditor> editor(measured.createEditor());
+        ui::AnalysisPanel* panel=nullptr;juce::ToggleButton* toggle=nullptr;
+        for(int i=0;i<editor->getNumChildComponents();++i){
+            auto* child=editor->getChildComponent(i);
+            if(auto* analysis=dynamic_cast<ui::AnalysisPanel*>(child))panel=analysis;
+            if(auto* button=dynamic_cast<juce::ToggleButton*>(child);button&&button->getButtonText()=="Visualize")toggle=button;
+        }
+        require(panel&&toggle,"plugin visualization switch missing");
+        require(editor->getHeight()==620&&panel->getBounds().getBottom()<=editor->getHeight(),"plugin analyzer clipped by host editor");
+        require(!panel->isVisible(),"analyzer should start hidden");
+        toggle->setToggleState(true,juce::sendNotificationSync);require(panel->isVisible(),"analyzer switch did not show panel");
+        toggle->setToggleState(false,juce::sendNotificationSync);require(!panel->isVisible(),"analyzer switch did not restore editor");
+        measured.analysis.setEnabled(true);b.clear();pump(measured,b);editor.reset();
+        require(!measured.analysis.isEnabled(),"editor destruction must disable tap");
+    }
+    app::Runtime runtime;runtime.chain.effects.push_back(createEffect("gain","gain"));
+    require(runtime.prepare({96000,64,2},{0,1}),"runtime analysis prepare");runtime.analysis.setEnabled(true);
+    std::array<float,64> in{},l{},r{};in.fill(.25f);const float* ins[]{in.data(),in.data()};float* outs[]{l.data(),r.data()};
+    {allocation_tracker::ProcessScope scope;runtime.process({ins,2,outs,2,64});}
+    require(runtime.analysis.tryRead(packet)&&packet.sampleRate==96000&&packet.channels==2,"runtime tap configuration");
+    require(packet.samples[0][63]>.2f&&packet.samples[2][63]>.2f&&l[63]==0,"chain tap before standalone mute/clamp");
+    require(allocation_tracker::processAllocations==0&&allocation_tracker::processFrees==0,"analysis callback allocation/free");
+    std::cout<<"Analysis plugin ON/OFF exact, editor reopen x8, Standalone pre-mute tap PASS\n";
+}
+
+int main(int argc,char** argv){juce::ScopedJuceInitialiser_GUI init;try{if(argc>1&&std::string(argv[1])=="analysis"){analysisIntegration();return 0;}if(argc>1&&std::string(argv[1])=="profile"){profile();return 0;}if(argc>1&&std::string(argv[1])=="input")inputTrim();else if(argc>1&&std::string(argv[1])=="drive-propagation")customDriveRealtime();else if(argc>1&&std::string(argv[1])=="grain-state")customDriveState();else if(argc>1&&std::string(argv[1])=="alpha")alphaUX();else if(argc>1)concurrent();else{matrix();state();automation();customDriveState();}require(allocation_tracker::processAllocations==0&&allocation_tracker::processFrees==0,"plugin process allocated/freed");std::cout<<"Plugin lifecycle/state/stereo/automation/allocation PASS\n";}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

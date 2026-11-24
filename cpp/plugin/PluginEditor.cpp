@@ -1,12 +1,22 @@
 #include "PluginProcessor.h"
 #include "../ui/AlphaUI.h"
+#include "../ui/AnalysisPanel.h"
 namespace multi_effects::plugin {
 class Editor final : public juce::AudioProcessorEditor, private juce::Timer, private juce::ListBoxModel {
 public:
-    explicit Editor(Processor& processor):AudioProcessorEditor(processor),owner(processor),list("Effect Chain",this) {
+    explicit Editor(Processor& processor):AudioProcessorEditor(processor),owner(processor),list("Effect Chain",this),analysisPanel(owner.analysis) {
+        addChildComponent(analysisPanel);
         for(auto* l:{&title,&preset,&meters,&status,&irStatus,&selection})addAndMakeVisible(*l);
         for(auto* b:{&load,&save,&saveAs,&ir,&loadSelected})addAndMakeVisible(*b);
-        addAndMakeVisible(list);addAndMakeVisible(browser);addAndMakeVisible(bypass);addAndMakeVisible(globalBypass);
+        addAndMakeVisible(list);addAndMakeVisible(browser);addAndMakeVisible(bypass);addAndMakeVisible(globalBypass);addAndMakeVisible(visualization);
+        visualization.onClick=[this]{
+            const bool showing=visualization.getToggleState();
+            list.setVisible(!showing);selection.setVisible(!showing);bypass.setVisible(!showing);
+            for(auto& row:rows)row->setVisible(!showing);
+            irStatus.setVisible(!showing);ir.setVisible(!showing);
+            analysisPanel.setVisible(showing);
+            if(showing)analysisPanel.toFront(false);
+        };
         addAndMakeVisible(trim);addAndMakeVisible(trimLabel);
         trimLabel.setText("Input Trim",juce::dontSendNotification);
         trimAttachment=std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(owner.parameters,"input.trim",trim);
@@ -20,7 +30,8 @@ public:
     }
     ~Editor() override {stopTimer();clearBindings();}
     void resized() override {
-        title.setBounds(12,8,620,28);globalBypass.setBounds(720,8,165,28);
+        analysisPanel.setBounds(12,112,getWidth()-24,394);
+        title.setBounds(12,8,600,28);visualization.setBounds(610,8,105,28);globalBypass.setBounds(720,8,165,28);
         preset.setBounds(12,40,485,26);trimLabel.setBounds(500,40,85,26);trim.setBounds(585,40,300,26);browser.setBounds(12,72,285,28);loadSelected.setBounds(305,72,85,28);
         load.setBounds(400,72,105,28);save.setBounds(515,72,80,28);saveAs.setBounds(605,72,105,28);
         list.setBounds(12,112,270,355);selection.setBounds(300,110,580,28);bypass.setBounds(300,142,260,26);
@@ -52,7 +63,7 @@ private:
                 auto* attached=binding.get();binding->sendInitialUpdate();
                 // A whole gesture per edit works for slider, typed text, reset and choice.
                 control->onChange=[attached](float v){attached->setValueAsCompleteGesture(v);};attachments.push_back(std::move(binding));}
-            addAndMakeVisible(*control);rows.push_back(std::move(control));}
+            addAndMakeVisible(*control);control->setVisible(!visualization.getToggleState());rows.push_back(std::move(control));}
         resized();
     }
     void refreshChain() {
@@ -107,11 +118,12 @@ private:
         status.setText((globalBypass.getToggleState()?"BYPASS | ":"DSP enabled (host controls playback) | ")+modes+" | "+ui::inputReading(owner.input)+"\n"+(localError.isEmpty()?owner.statusText():localError+" | "+owner.statusText()),juce::dontSendNotification);
     }
     Processor& owner;Chain view;juce::ListBox list;juce::TooltipWindow tooltips{this,700};
+    ui::AnalysisPanel analysisPanel;
     ui::InputTrimSlider trim;juce::Label trimLabel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> trimAttachment;
     juce::Label title,preset,meters,status,irStatus,selection;juce::ComboBox browser;
     juce::TextButton load{"Open..."},save{"Save"},saveAs{"Save As..."},loadSelected{"Load"},ir{"Load user IR..."};
-    juce::ToggleButton bypass{"Bypass selected effect"},globalBypass{"Plugin bypass"};
+    juce::ToggleButton bypass{"Bypass selected effect"},globalBypass{"Plugin bypass"},visualization{"Visualize"};
     std::vector<std::unique_ptr<ui::ParameterRow>> rows;
     std::vector<std::unique_ptr<juce::ParameterAttachment>> attachments;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment,globalAttachment;

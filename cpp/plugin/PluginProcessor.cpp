@@ -23,6 +23,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout Processor::layout() {
     return result;
 }
 Processor::Processor():AudioProcessor(BusesProperties().withInput("Input",juce::AudioChannelSet::stereo(),true).withOutput("Output",juce::AudioChannelSet::stereo(),true)),parameters(*this,nullptr,"HostParameters",layout()) {
+    analysis.prepare();
     hostTrim=parameters.getRawParameterValue("input.trim");
     globalBypass=parameters.getRawParameterValue("plugin.bypass");
     for(const auto& d:registry()) {
@@ -46,7 +47,7 @@ void Processor::applyTargets(Chain& c) {
     for(const auto& m:mappings)if(auto* e=first(c,m.type)){if(m.bypass)e->bypass=m.target->load();else if(auto* p=e->parameter(m.key))p->set(m.target->load());}
 }
 std::unique_ptr<Processor::RenderState> Processor::build(unsigned ticket) {
-    auto r=std::make_unique<RenderState>();r->chain=cloneConfiguration(model);applyTargets(r->chain);r->chain.prepare(spec);
+    auto r=std::make_unique<RenderState>();r->chain=cloneConfiguration(model);applyTargets(r->chain);r->chain.prepare(spec);r->chain.analysis=&analysis;
     r->hostDrive=first(r->chain,"custom_drive");
     for(const auto& m:mappings){auto* e=first(r->chain,m.type);r->bindings.push_back({e&&!m.bypass?e->parameter(m.key):nullptr,e});}
     for(const auto& e:r->chain.effects)r->latency+=e->latencySamples();
