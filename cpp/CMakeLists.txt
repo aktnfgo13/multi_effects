@@ -443,3 +443,7 @@ add_test(NAME AnalysisTapSpectrum COMMAND test_analysis)
 if(CMAKE_CXX_FLAGS MATCHES "fsanitize")
     target_compile_definitions(test_analysis PRIVATE MULTI_EFFECTS_TEST_SANITIZER=1)
 endif()
+
+add_executable(test_amp_quality tests/test_amp_quality.cpp)
+target_link_libraries(test_amp_quality PRIVATE multi_effects_dsp)
+add_test(NAME AmpQualityDiagnostics COMMAND test_amp_quality)
