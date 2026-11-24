@@ -75,7 +75,10 @@ public:
                     if (index >= 0 && index < long(impulseResponse.size())) sum += impulseResponse[std::size_t(index)] * w;
                     weight += w;
                 }
-                ir[i] = float(sum / weight);
+                // IR taps represent a convolution kernel. Preserve its integral
+                // across sample rates; audio-waveform resampling alone changes
+                // gain in proportion to the destination/source rate.
+                ir[i] = float(sum / weight * ratio);
             }
             Cabinet cabinet; cabinet.prepare(ir);
             processor_ = [cabinet = std::move(cabinet)](float x, const auto& p) mutable { return cabinet.processSample(x) * std::pow(10.f, p[0]/20); };

@@ -17,6 +17,20 @@ void operator delete[](void* p, std::size_t) noexcept { ::operator delete(p); }
 int main()
 {
     using namespace multi_effects;
+    // Resampling an impulse response must preserve convolution gain, not
+    // waveform amplitude. A smooth, interior kernel avoids boundary ambiguity.
+    double referenceGain=0;
+    for(double rate : {48000.,44100.,96000.}) {
+        auto cab=createEffect("cabinet","rate-gain");
+        cab->impulseSampleRate=48000;cab->impulseResponse.resize(1024);
+        double sum=0;for(std::size_t i=0;i<1024;++i){double v=std::exp(-std::pow((double(i)-512)/32,2));cab->impulseResponse[i]=float(v);sum+=v;}
+        for(auto& v:cab->impulseResponse)v/=float(sum);
+        cab->prepare({rate,128});std::vector<float> data(4096,1.f);
+        watch=true;cab->process(data.data(),data.size());watch=false;
+        const double gain=data.back();if(rate==48000)referenceGain=gain;
+        std::cout<<"Cabinet rate="<<rate<<" steady gain="<<gain<<'\n';
+        if(std::abs(gain-referenceGain)>1e-4){std::cerr<<"IR resampling changed convolution gain\n";return 9;}
+    }
     for (double rate : {44100.,48000.,96000.})
     {
         for (const auto& definition : registry())
